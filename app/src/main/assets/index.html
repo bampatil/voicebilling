@@ -1,0 +1,708 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Voice Billing</title>
+<style>
+/* Layout: counter-top tool. Mic and live bill first, catalogue below. Ledger paper feel, ink-blue accent. */
+:root{
+  --bg:#f6f4ee; --paper:#fffdf8; --line:#e2ddcf; --fg:#22211d; --muted:#6f6b60;
+  --ink:#1f4fa3; --ink-soft:#e5ecf8; --ok:#2f7d4f; --warn:#b5651d; --rec:#c8372d;
+  --font:"Noto Sans Kannada","Noto Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"Roboto Mono",Menlo,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#15161a; --paper:#1d1f25; --line:#30333c; --fg:#ecebe6; --muted:#9a9890;
+  --ink:#8fb0ff; --ink-soft:#24304a; --ok:#6cc792; --warn:#e7a25c; --rec:#ff6f61; color-scheme:dark}}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font:15px/1.5 var(--font);padding:env(safe-area-inset-top,0) 16px env(safe-area-inset-bottom,0)}
+.wrap{max-width:640px;margin:0 auto;padding-block:16px 48px;display:flex;flex-direction:column;gap:16px}
+header{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+h1{margin:0;font-size:22px}
+h1 small{display:block;font-size:12px;font-weight:400;color:var(--muted)}
+h2{margin:0 0 10px;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+section{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:16px}
+button{font:inherit;border:1px solid var(--line);background:var(--paper);color:var(--fg);border-radius:10px;padding:10px 14px;cursor:pointer}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+button.small{padding:6px 10px;font-size:13px}
+input,select{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px}
+.microw{display:flex;gap:16px;align-items:center}
+.mic{width:84px;height:84px;border-radius:50%;flex:none;background:var(--ink);color:#fff;border:none;font-size:15px;font-weight:700;box-shadow:0 2px 0 rgba(0,0,0,.15)}
+.mic.on{background:var(--rec);animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{50%{box-shadow:0 0 0 10px color-mix(in srgb,var(--rec) 20%,transparent)}}
+@media (prefers-reduced-motion:reduce){.mic.on{animation:none}}
+.micinfo{min-width:0;flex:1;display:flex;flex-direction:column;gap:8px}
+.langs{display:flex;gap:6px;flex-wrap:wrap}
+.chip{padding:5px 12px;border-radius:999px;font-size:13px}
+.chip[aria-pressed="true"]{background:var(--ink);color:#fff;border-color:var(--ink)}
+.status{font-size:13px;color:var(--muted)}
+.status b{color:var(--fg)}
+.heard{margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--ink-soft);min-height:44px;font-size:16px}
+.heard .interim{color:var(--muted)}
+.heard .miss{color:var(--warn)}
+.typerow{display:flex;gap:8px;margin-top:10px}
+.typerow input{flex:1;min-width:0}
+.tablewrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);text-align:left;font-weight:600;padding:6px 6px;border-bottom:1px solid var(--line)}
+td{padding:8px 6px;border-bottom:1px dashed var(--line);vertical-align:top}
+td.num,th.num{text-align:right}
+.bill td.item b{display:block}
+.bill td.item small{color:var(--muted);font-size:12px}
+.bill td.item small.note{color:var(--warn)}
+.bill input.qty{width:4.6rem;text-align:right;padding:5px 6px}
+.qtyunit{color:var(--muted);font-size:12px;margin-left:4px}
+.totalrow{display:flex;justify-content:space-between;align-items:baseline;margin-top:12px;padding-top:12px;border-top:2px solid var(--fg)}
+.totalrow span{font-size:14px;color:var(--muted)}
+.totalrow b{font:700 28px var(--mono)}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.empty{color:var(--muted);font-size:14px;padding:8px 0}
+.cat input{width:100%;min-width:0;padding:6px}
+.cat td{border-bottom:1px solid var(--line);padding:6px 4px}
+.cat .c-name{min-width:7rem}.cat .c-alias{min-width:10rem}.cat .c-price{width:5.5rem}
+.hint{font-size:13px;color:var(--muted);margin:8px 0 0}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:8px 14px;border-radius:999px;font-size:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Voice Billing<small>say the items, get the bill</small></h1>
+    <span class="status" id="engine">Chrome speech recognition</span>
+  </header>
+
+  <section aria-label="Listen">
+    <div class="microw">
+      <button class="mic" id="mic" aria-pressed="false">Speak</button>
+      <div class="micinfo">
+        <div class="langs" role="group" aria-label="Language">
+          <button class="chip" data-lang="kn-IN">ಕನ್ನಡ</button>
+          <button class="chip" data-lang="en-IN">English</button>
+          <button class="chip" data-lang="hi-IN">हिन्दी</button>
+        </div>
+        <div class="status" id="status">Tap Speak, then say items like "ಒಂದು ಕೆಜಿ ಸಕ್ಕರೆ, ಎರಡು ಪಾರ್ಲೆ ಜಿ".</div>
+        <button class="small" id="offlineBtn" hidden></button>
+      </div>
+    </div>
+    <div class="heard" id="heard" aria-live="polite"><span class="interim">What you say appears here.</span></div>
+    <div class="typerow">
+      <input type="text" id="typed" placeholder="Or type to test: 2 kg akki ardha kg sakkare" aria-label="Type items to test">
+      <button id="typedGo">Add</button>
+    </div>
+  </section>
+
+  <section aria-label="Bill">
+    <h2>Bill</h2>
+    <div class="tablewrap">
+      <table class="bill">
+        <thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Amount</th><th></th></tr></thead>
+        <tbody id="billBody"></tbody>
+      </table>
+    </div>
+    <p class="empty" id="billEmpty">No items yet.</p>
+    <div class="totalrow"><span id="itemCount">0 items</span><b id="total">₹0</b></div>
+    <div class="actions">
+      <button id="sayTotal">Read total aloud</button>
+      <button id="undo">Remove last</button>
+      <button id="newBill">New bill</button>
+      <button id="copyBill">Copy bill</button>
+    </div>
+    <p class="hint">Voice commands: "ಒಟ್ಟು" / "total" reads the total, "ತೆಗಿ" / "cancel" removes the last item, "ಹೊಸ ಬಿಲ್" / "new bill" clears.</p>
+  </section>
+
+  <section aria-label="Catalogue">
+    <h2>Items and prices</h2>
+    <p class="hint" style="margin:0 0 10px">Add every way people say an item: Kannada script, English, Hindi, brand names, and words the phone mishears. Prices below are examples; set your own.</p>
+    <div class="tablewrap">
+      <table class="cat">
+        <thead><tr><th>Item</th><th>Other names</th><th>Sold per</th><th class="num">Price ₹</th><th></th></tr></thead>
+        <tbody id="catBody"></tbody>
+      </table>
+    </div>
+    <div class="actions">
+      <button id="addItem">Add item</button>
+      <button id="resetCat">Restore example list</button>
+    </div>
+  </section>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+/* Voice Bill parser: spoken text (Kannada script, romanized Kannada, English, Hindi) → bill lines.
+   Pure functions, no browser APIs, so it can be tested on its own and reused in other apps. */
+const VB = (() => {
+  "use strict";
+
+  /* ---- 1. Kannada script → rough Latin ---- */
+  const KV = { "ಅ":"a","ಆ":"aa","ಇ":"i","ಈ":"ii","ಉ":"u","ಊ":"uu","ಋ":"ru","ಎ":"e","ಏ":"e","ಐ":"ai","ಒ":"o","ಓ":"o","ಔ":"au" };
+  const KC = { "ಕ":"k","ಖ":"kh","ಗ":"g","ಘ":"gh","ಙ":"n","ಚ":"ch","ಛ":"chh","ಜ":"j","ಝ":"jh","ಞ":"n","ಟ":"t","ಠ":"th","ಡ":"d","ಢ":"dh","ಣ":"n",
+    "ತ":"t","ಥ":"th","ದ":"d","ಧ":"dh","ನ":"n","ಪ":"p","ಫ":"ph","ಬ":"b","ಭ":"bh","ಮ":"m","ಯ":"y","ರ":"r","ಱ":"r","ಲ":"l","ವ":"v","ಶ":"sh","ಷ":"sh","ಸ":"s","ಹ":"h","ಳ":"l","ೞ":"l" };
+  const KS = { "ಾ":"aa","ಿ":"i","ೀ":"ii","ು":"u","ೂ":"uu","ೃ":"ru","ೆ":"e","ೇ":"e","ೈ":"ai","ೊ":"o","ೋ":"o","ೌ":"au" };
+  const KD = "೦೧೨೩೪೫೬೭೮೯";
+  // Devanagari (Hindi recognizer output) uses the same pattern.
+  const DV = { "अ":"a","आ":"aa","इ":"i","ई":"ii","उ":"u","ऊ":"uu","ऋ":"ru","ए":"e","ऐ":"ai","ओ":"o","औ":"au" };
+  const DC = { "क":"k","ख":"kh","ग":"g","घ":"gh","च":"ch","छ":"chh","ज":"j","झ":"jh","ट":"t","ठ":"th","ड":"d","ढ":"dh","ण":"n",
+    "त":"t","थ":"th","द":"d","ध":"dh","न":"n","प":"p","फ":"ph","ब":"b","भ":"bh","म":"m","य":"y","र":"r","ल":"l","व":"v","श":"sh","ष":"sh","स":"s","ह":"h" };
+  const DS = { "ा":"aa","ि":"i","ी":"ii","ु":"u","ू":"uu","ृ":"ru","े":"e","ै":"ai","ो":"o","ौ":"au","ॉ":"o" };
+  const DD = "०१२३४५६७८९";
+  Object.assign(KV, DV); Object.assign(KC, DC); Object.assign(KS, DS);
+  function translitKannada(s) {
+    let out = "";
+    const ch = [...s];
+    for (let i = 0; i < ch.length; i++) {
+      const c = ch[i], nx = ch[i + 1];
+      if (KC[c]) {
+        out += KC[c];
+        if (nx === "಼" || nx === "़") { i++; }
+        const n2 = ch[i + 1];
+        if (n2 === "್" || n2 === "्") { i++; }
+        else if (KS[n2]) { out += KS[n2]; i++; }
+        else if (DC[c] && !(n2 && /[\u0900-\u097F]/.test(n2))) { /* Hindi drops the final "a": चावल → chaaval */ }
+        else out += "a";
+      } else if (KV[c]) out += KV[c];
+      else if (KS[c]) out += KS[c];
+      else if (c === "ಂ" || c === "ं" || c === "ँ") out += (!nx || /[\sಪಬಮपबम]/.test(nx)) ? "m" : "n";
+      else if (c === "ಃ") out += "h";
+      else if (KD.includes(c)) out += KD.indexOf(c);
+      else if (DD.includes(c)) out += DD.indexOf(c);
+      else if ("಼़್्।".includes(c)) { /* skip */ }
+      else out += c;
+    }
+    return out;
+  }
+
+  /* ---- 2. Phonetic key: spelling differences shrink so "paarle", "parle" and ಪಾರ್ಲೆ all meet ---- */
+  function phon(w) {
+    let s = translitKannada(String(w).toLowerCase()).normalize("NFKD").replace(/[̀-ͯ]/g, "");
+    s = s.replace(/[^a-z0-9]/g, "");
+    s = s.replace(/ee/g, "i").replace(/oo/g, "u");
+    s = s.replace(/chh/g, "ch").replace(/ph/g, "f").replace(/([kgbdtj])h/g, "$1")
+         .replace(/sh/g, "s").replace(/w/g, "v").replace(/z/g, "j").replace(/q/g, "k").replace(/x/g, "ks")
+         .replace(/ck/g, "k").replace(/c(?!h)/g, "k").replace(/y/g, "i");
+    s = s.replace(/(.)\1+/g, "$1");
+    return s;
+  }
+
+  /* ---- 3. Numbers, fractions, units (all compared by phonetic key) ---- */
+  const NUM_WORDS = {
+    // Kannada
+    ondu:1, ond:1, ondhu:1, eradu:2, yeradu:2, erdu:2, mooru:3, muru:3, naalku:4, nalku:4, aidu:5, aydu:5, aaru:6, elu:7, yelu:7,
+    entu:8, yentu:8, ombattu:9, hattu:10, hannondu:11, hanneradu:12, hadinaidu:15, ippattu:20, mattu_:0,
+    nooru:100, innooru:200, munnooru:300, naanooru:400, ainooru:500, saavira:1000,
+    // English
+    one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8, nine:9, ten:10, eleven:11, twelve:12, fifteen:15,
+    twenty:20, twentyfive:25, thirty:30, forty:40, fifty:50, hundred:100, thousand:1000,
+    // Hindi
+    ek:1, do:2, teen:3, char:4, chaar:4, paanch:5, panch:5, chhe:6, che:6, saat:7, aath:8, nau:9, das:10, sau:100
+  };
+  delete NUM_WORDS.mattu_;
+  const FRAC_WORDS = { half:0.5, ardha:0.5, aadha:0.5, adha:0.5, quarter:0.25, kaal:0.25, kaalu:0.25, paav:0.25, pav:0.25,
+    mukkaal:0.75, mukkalu:0.75, vare:0.5, ovare:0.5 };
+  const FIXED_QTY = { dedh:1.5, dhai:2.5, ondoovare:1.5, ondovare:1.5, eradoovare:2.5 };
+  const UNIT_WORDS = {
+    kg:"kg", kgs:"kg", kilo:"kg", kilos:"kg", kilogram:"kg", kilograms:"kg", keji:"kg", kejii:"kg",
+    g:"g", gm:"g", gms:"g", gram:"g", grams:"g", graam:"g", gramu:"g",
+    l:"l", ltr:"l", litre:"l", liter:"l", litres:"l", liters:"l", leetar:"l", litar:"l", liitar:"l", leetaru:"l",
+    ml:"ml", milli:"ml", millilitre:"ml", milliliter:"ml",
+    packet:"packet", packets:"packet", pkt:"packet", pack:"packet", paket:"packet", paaket:"packet", pakit:"packet", paakettu:"packet", pocket:"packet",
+    piece:"piece", pieces:"piece", pc:"piece", pcs:"piece", peace:"piece",
+    dozen:"dozen", dajan:"dozen", darjan:"dozen", dazan:"dozen"
+  };
+  const FILLER = ["of","the","a","an","and","please","pls","ok","okay","mattu","matte","aur","bhi","kodi","kodu","kottu","beku","beko","haaki","haku",
+    "ge","ke","ka","ki","sir","madam","anna","akka","guru","saar","nanage","nange","mujhe","chahiye","dena","do_", "aaytu","ayitu","illi","alli","inna","innu"];
+
+  const keyMap = obj => { const m = new Map(); for (const k in obj) m.set(phon(k), obj[k]); return m; };
+  const NUMK = keyMap(NUM_WORDS), FRACK = keyMap(FRAC_WORDS), FIXK = keyMap(FIXED_QTY), UNITK = keyMap(UNIT_WORDS);
+  const FILLK = new Set(FILLER.map(phon));
+
+  const UNIT_KIND = { kg:["w",1000], g:["w",1], l:["v",1000], ml:["v",1], packet:["c",1], piece:["c",1], dozen:["c",12] };
+
+  /* ---- 4. Tokenise ---- */
+  function tokenize(text) {
+    let s = translitKannada(String(text)).toLowerCase();
+    s = s.replace(/(\d)\s*\/\s*(\d)/g, "$1/$2");                 // 1/2
+    s = s.replace(/(\d)([a-z])/g, "$1 $2").replace(/([a-z])(\d)/g, "$1 $2");   // 2kg → 2 kg
+    s = s.replace(/₹|rs\.?|rupees?/g, " ");
+    s = s.replace(/[^a-z0-9./ ]+/g, " ");
+    const raw = s.split(/\s+/).filter(Boolean);
+    return raw.map(w => {
+      const k = phon(w);
+      let t = { w, k, type: "word" };
+      if (/^\d+(\.\d+)?$/.test(w)) t = { w, k, type: "num", v: parseFloat(w) };
+      else if (/^\d+\/\d+$/.test(w)) { const [a, b] = w.split("/").map(Number); t = { w, k, type: "frac", v: b ? a / b : 0 }; }
+      else if (FIXK.has(k)) t = { w, k, type: "num", v: FIXK.get(k) };
+      else if (NUMK.has(k)) t = { w, k, type: "num", v: NUMK.get(k) };
+      else if (FRACK.has(k)) t = { w, k, type: "frac", v: FRACK.get(k) };
+      else if (UNITK.has(k)) t = { w, k, type: "unit", u: UNITK.get(k) };
+      else if (FILLK.has(k)) t = { w, k, type: "fill" };
+      return t;
+    });
+  }
+  const isQty = t => t.type === "num" || t.type === "frac" || t.type === "unit";
+
+  /* ---- 5. Fuzzy item matching ---- */
+  function lev(a, b) {
+    if (a === b) return 0;
+    const m = a.length, n = b.length; if (!m) return n; if (!n) return m;
+    let prev = Array.from({ length: n + 1 }, (_, j) => j), cur = new Array(n + 1);
+    for (let i = 1; i <= m; i++) {
+      cur[0] = i;
+      for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      [prev, cur] = [cur, prev];
+    }
+    return prev[n];
+  }
+  const sim = (a, b) => 1 - lev(a, b) / Math.max(a.length, b.length);
+  const need = len => len <= 3 ? 1 : len <= 5 ? 0.8 : 0.75;
+  // Kannada case endings: akki-yannu, sakkare-ge, haalu-alli, enne-inda
+  const SUFFIX = new Set(["anu","ianu","nu","u","ge","ige","ke","ike","ali","inda","nda","a","e","du","na","da"].map(x => x));
+
+  function prepareCatalogue(items) {
+    return items.map(it => {
+      const names = [it.name, ...(it.aliases || [])].map(s => String(s).trim()).filter(Boolean);
+      const keys = [...new Set(names.map(n => phon(n)).filter(k => k.length >= 2))];
+      return { ...it, keys };
+    });
+  }
+
+  function scoreWindow(key, cat) {
+    let best = null;
+    for (const it of cat) for (const a of it.keys) {
+      let s = sim(key, a);
+      // Kannada adds endings to words (akki-yannu, sakkare-ge): allow the start of a longer word to match.
+      if (key.length > a.length && a.length >= 4 && key.length - a.length <= 5) s = Math.max(s, sim(key.slice(0, a.length), a) - 0.05);
+      const suffixHit = a.length >= 3 && key.length > a.length && key.startsWith(a) && SUFFIX.has(key.slice(a.length));
+      if (suffixHit) s = Math.max(s, 0.95);
+      if ((s >= need(a.length) || suffixHit) && (!best || s > best.s)) best = { item: it, s, alias: a };
+    }
+    return best;
+  }
+
+  function findItems(toks, cat) {
+    const cands = [];
+    for (let i = 0; i < toks.length; i++) {
+      if (toks[i].type !== "word") continue;
+      let key = "";
+      for (let L = 1; L <= 3 && i + L <= toks.length; L++) {
+        const t = toks[i + L - 1];
+        if (t.type !== "word") break;
+        key += t.k;
+        const m = scoreWindow(key, cat);
+        if (m) cands.push({ start: i, end: i + L, ...m, rank: m.s + 0.04 * (L - 1) });
+      }
+    }
+    cands.sort((a, b) => b.rank - a.rank);
+    const used = new Array(toks.length).fill(false), picked = [];
+    for (const c of cands) {
+      let free = true; for (let k = c.start; k < c.end; k++) if (used[k]) { free = false; break; }
+      if (!free) continue;
+      for (let k = c.start; k < c.end; k++) used[k] = true;
+      picked.push(c);
+    }
+    picked.forEach(c => {
+      const nx = toks[c.end];
+      if (nx && nx.k === "g") {
+        const base = toks.slice(c.start, c.end).map(t => t.k).join("");
+        if (c.item.keys.some(k => k === base + "g")) c.end++;
+      }
+    });
+    return picked.sort((a, b) => a.start - b.start);
+  }
+
+  /* ---- 6. Quantity from a run of tokens ---- */
+  function readQty(run) {
+    let num = null, unit = null, mult = 1;
+    for (const t of run) {
+      if (t.type === "num") {
+        if ((t.v === 100 || t.v === 1000) && num !== null && num < 10) num *= t.v;     // "two hundred", "eradu nooru"
+        else if (num !== null && num >= 100 && t.v < 100) num += t.v;                 // "nooru aivattu" style
+        else if (num !== null && t.v < 1) num += t.v;
+        else num = (num !== null && num < 1) ? num + t.v : t.v;
+      } else if (t.type === "frac") num = num === null ? t.v : num + t.v;               // "ondu vare", "one and half"
+      else if (t.type === "unit") { if (t.u === "dozen") { mult = 12; unit = "piece"; } else unit = t.u; }
+    }
+    if (num === null && unit === null) return null;
+    if (num === null) num = 1;
+    return { n: num * mult, unit };
+  }
+
+  // Convert spoken quantity into the item's own selling unit.
+  function toItemUnit(q, itemUnit) {
+    if (!q) return { qty: 1, note: "" };
+    if (!q.unit) return { qty: q.n, note: "" };
+    const [sk, sf] = UNIT_KIND[q.unit] || [], [ik, iff] = UNIT_KIND[itemUnit] || [];
+    if (sk && ik && sk === ik) return { qty: q.n * sf / iff, note: "" };
+    return { qty: q.n, note: `heard "${q.unit}", sold per ${itemUnit}` };
+  }
+
+  /* ---- 7. Whole utterance → lines ---- */
+  function parse(text, catalogue) {
+    const cat = catalogue[0] && catalogue[0].keys ? catalogue : prepareCatalogue(catalogue);
+    const toks = tokenize(text);
+    const items = findItems(toks, cat);
+    // Runs of quantity words between items.
+    const runs = []; let cur = null;
+    toks.forEach((t, i) => {
+      const inItem = items.some(m => i >= m.start && i < m.end);
+      if (!inItem && isQty(t)) { if (!cur) { cur = { start: i, end: i + 1, toks: [t] }; runs.push(cur); } else { cur.end = i + 1; cur.toks.push(t); } }
+      else if (t.type === "fill" && cur && !inItem && toks[i + 1] && toks[i + 1].type === "frac") { /* "one and half" keeps the run going */ }
+      else cur = null;
+    });
+    // Style of this sentence: quantity before the item ("ond kg sakkare") or after ("sakkare ond kg").
+    const before = items.length && runs.some(r => r.end <= items[0].start);
+    const usedRuns = new Set();
+    const lines = items.map((m, idx) => {
+      let run = null;
+      if (before) {
+        const prevEnd = idx ? items[idx - 1].end : 0;
+        run = runs.filter(r => r.start >= prevEnd && r.end <= m.start).pop() || null;
+      }
+      if (!run) {
+        const nextStart = idx + 1 < items.length ? items[idx + 1].start : toks.length;
+        run = runs.find(r => r.start >= m.end && r.end <= nextStart && !usedRuns.has(r)) || null;
+        if (!run && !before) run = null;
+      }
+      if (!run) {   // mixed order in one sentence: take an unused quantity right before the item
+        const prevEnd = idx ? items[idx - 1].end : 0;
+        run = runs.filter(r => r.start >= prevEnd && r.end <= m.start && !usedRuns.has(r)).pop() || null;
+      }
+      if (run) usedRuns.add(run);
+      const q = run ? readQty(run.toks) : null;
+      const { qty, note } = toItemUnit(q, m.item.unit);
+      return { id: m.item.id, name: m.item.name, unit: m.item.unit, price: Number(m.item.price) || 0,
+               qty: Math.round(qty * 1000) / 1000, heard: toks.slice(run && run.start < m.start ? run.start : m.start, run && run.end > m.end ? run.end : m.end).map(t => t.w).join(" "),
+               match: Math.round(m.s * 100), note };
+    });
+    const covered = new Set();
+    items.forEach(m => { for (let k = m.start; k < m.end; k++) covered.add(k); });
+    runs.forEach(r => { if (usedRuns.has(r)) for (let k = r.start; k < r.end; k++) covered.add(k); });
+    const unknown = toks.filter((t, i) => !covered.has(i) && t.type !== "fill").map(t => t.w);
+    return { lines, unknown, tokens: toks.map(t => t.w).join(" ") };
+  }
+
+  /* ---- 8. Spoken commands ---- */
+  const CMD = {
+    undo: ["cancel", "remove", "remove last", "delete", "tegi", "tegeyiri", "beda", "hatao", "galat", "wrong"],
+    clear: ["clear", "new bill", "hosa bill", "naya bill", "clear bill"],
+    total: ["total", "ottu", "ottu eshtu", "kitna hua", "eshtu aaytu", "bill"]
+  };
+  const CMDK = Object.fromEntries(Object.entries(CMD).map(([k, v]) => [k, v.map(phon)]));
+  function command(text) {
+    const k = phon(text);
+    for (const [name, keys] of Object.entries(CMDK)) if (keys.includes(k)) return name;
+    return null;
+  }
+
+  return { parse, prepareCatalogue, command, phon, translitKannada, tokenize };
+})();
+if (typeof module !== "undefined") module.exports = VB;
+
+</script>
+<script>
+(() => {
+"use strict";
+const $ = id => document.getElementById(id);
+const load = (k, d) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
+const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+
+const EXAMPLE = [
+  { name: "Sugar", aliases: "sakkare, ಸಕ್ಕರೆ, cheeni, चीनी, shugar", unit: "kg", price: 45 },
+  { name: "Rice", aliases: "akki, ಅಕ್ಕಿ, chawal, चावल, sona masoori", unit: "kg", price: 60 },
+  { name: "Toor dal", aliases: "togari bele, ತೊಗರಿ ಬೇಳೆ, tur dal, dal, arhar dal", unit: "kg", price: 160 },
+  { name: "Atta", aliases: "godhi hittu, ಗೋಧಿ ಹಿಟ್ಟು, wheat flour, aata", unit: "kg", price: 50 },
+  { name: "Sunflower oil", aliases: "oil, enne, ಎಣ್ಣೆ, sunflower, tel", unit: "l", price: 150 },
+  { name: "Nandini milk", aliases: "milk, haalu, ಹಾಲು, nandini, doodh", unit: "packet", price: 27 },
+  { name: "Parle-G", aliases: "parle, parle g, ಪಾರ್ಲೆ ಜಿ, biscuit", unit: "packet", price: 10 },
+  { name: "Salt", aliases: "uppu, ಉಪ್ಪು, namak", unit: "packet", price: 28 },
+  { name: "Eggs", aliases: "egg, motte, ಮೊಟ್ಟೆ, ande, anda", unit: "piece", price: 7 },
+  { name: "Onion", aliases: "eerulli, ಈರುಳ್ಳಿ, pyaz, onions", unit: "kg", price: 40 },
+  { name: "Tomato", aliases: "tomatoes, ಟೊಮ್ಯಾಟೊ, tamatar, टमाटर", unit: "kg", price: 30 },
+  { name: "Tea powder", aliases: "tea, tea pudi, ಟೀ ಪುಡಿ, chai patti", unit: "kg", price: 480 },
+  { name: "Maggi", aliases: "ಮ್ಯಾಗಿ, maggi noodles", unit: "packet", price: 15 }
+].map((x, i) => ({ id: i + 1, ...x }));
+
+let CAT = load("voicebilling-catalogue", null) || EXAMPLE.map(x => ({ ...x }));
+let BILL = load("voicebilling-bill", []);
+let LANG = load("voicebilling-lang", "kn-IN");
+let prepared = null;
+const UNITS = { kg: "kg", g: "g", l: "litre", ml: "ml", packet: "packet", piece: "piece" };
+
+function prep() {
+  prepared = VB.prepareCatalogue(CAT.map(c => ({ ...c, aliases: String(c.aliases || "").split(",").map(s => s.trim()).filter(Boolean) })));
+}
+const saveCat = () => { save("voicebilling-catalogue", CAT); prep(); };
+const saveBill = () => save("voicebilling-bill", BILL);
+
+/* ---------- formatting ---------- */
+const rupees = n => "₹" + (Math.round(n * 100) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+function qtyLabel(q, unit) {
+  if (unit === "kg" && q < 1) return `${Math.round(q * 1000)} g`;
+  if (unit === "l" && q < 1) return `${Math.round(q * 1000)} ml`;
+  return `${+q.toFixed(3)} ${UNITS[unit] || unit}`;
+}
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast.h); toast.h = setTimeout(() => t.hidden = true, 2200); }
+
+/* ---------- bill ---------- */
+function renderBill() {
+  const tb = $("billBody"); tb.textContent = "";
+  let total = 0;
+  BILL.forEach((l, i) => {
+    const amt = l.qty * l.price; total += amt;
+    const tr = document.createElement("tr");
+    const tdItem = document.createElement("td"); tdItem.className = "item";
+    const b = document.createElement("b"); b.textContent = l.name; tdItem.append(b);
+    const sm = document.createElement("small"); sm.textContent = `heard "${l.heard}"`; tdItem.append(sm);
+    if (l.note) { const n = document.createElement("small"); n.className = "note"; n.textContent = " · " + l.note; tdItem.append(n); }
+    const tdQ = document.createElement("td"); tdQ.className = "num";
+    const qi = document.createElement("input"); qi.type = "number"; qi.className = "qty"; qi.step = "any"; qi.min = "0"; qi.inputMode = "decimal";
+    qi.value = +l.qty.toFixed(3); qi.id = "qty-" + l.key; qi.setAttribute("aria-label", `Quantity of ${l.name} in ${UNITS[l.unit] || l.unit}`);
+    qi.onchange = () => { const v = parseFloat(qi.value); if (v >= 0) { l.qty = v; saveBill(); renderBill(); } };
+    const un = document.createElement("span"); un.className = "qtyunit"; un.textContent = UNITS[l.unit] || l.unit;
+    tdQ.append(qi, un);
+    const tdR = document.createElement("td"); tdR.className = "num"; tdR.textContent = `${rupees(l.price)}/${l.unit === "l" ? "L" : l.unit}`;
+    const tdA = document.createElement("td"); tdA.className = "num"; tdA.textContent = rupees(amt);
+    const tdX = document.createElement("td"); const x = document.createElement("button"); x.className = "small"; x.textContent = "✕"; x.setAttribute("aria-label", "Remove " + l.name);
+    x.onclick = () => { BILL.splice(i, 1); saveBill(); renderBill(); }; tdX.append(x);
+    tr.append(tdItem, tdQ, tdR, tdA, tdX); tb.append(tr);
+  });
+  $("billEmpty").hidden = BILL.length > 0;
+  $("total").textContent = rupees(total);
+  $("itemCount").textContent = BILL.length === 1 ? "1 item" : `${BILL.length} items`;
+  return total;
+}
+const billTotal = () => BILL.reduce((s, l) => s + l.qty * l.price, 0);
+
+/* ---------- catalogue editor ---------- */
+function renderCat() {
+  const tb = $("catBody"); tb.textContent = "";
+  CAT.forEach((c, i) => {
+    const tr = document.createElement("tr");
+    const mk = (cls, val, label, type = "text") => {
+      const td = document.createElement("td"); td.className = cls;
+      const inp = document.createElement("input"); inp.type = type; inp.value = val; inp.id = `cat-${cls}-${c.id}`; inp.setAttribute("aria-label", label);
+      if (type === "number") { inp.step = "any"; inp.min = "0"; inp.inputMode = "decimal"; }
+      td.append(inp); return [td, inp];
+    };
+    const [tdN, inN] = mk("c-name", c.name, "Item name");
+    const [tdA, inA] = mk("c-alias", c.aliases, "Other names, separated by commas");
+    const tdU = document.createElement("td"); const sel = document.createElement("select"); sel.id = "cat-unit-" + c.id; sel.setAttribute("aria-label", "Sold per");
+    Object.entries(UNITS).forEach(([v, t]) => { const o = document.createElement("option"); o.value = v; o.textContent = t; sel.append(o); });
+    sel.value = c.unit; tdU.append(sel);
+    const [tdP, inP] = mk("c-price", c.price, "Price in rupees", "number");
+    const tdX = document.createElement("td"); const x = document.createElement("button"); x.className = "small"; x.textContent = "✕"; x.setAttribute("aria-label", "Delete " + c.name);
+    let armed = false;
+    x.onclick = () => { if (!armed) { armed = true; x.textContent = "Sure?"; setTimeout(() => { armed = false; x.textContent = "✕"; }, 3000); return; } CAT.splice(i, 1); saveCat(); renderCat(); };
+    tdX.append(x);
+    inN.onchange = () => { c.name = inN.value.trim() || c.name; saveCat(); };
+    inA.onchange = () => { c.aliases = inA.value; saveCat(); };
+    sel.onchange = () => { c.unit = sel.value; saveCat(); };
+    inP.onchange = () => { c.price = parseFloat(inP.value) || 0; saveCat(); };
+    tr.append(tdN, tdA, tdU, tdP, tdX); tb.append(tr);
+  });
+}
+
+/* ---------- understanding what was said ---------- */
+function bestParse(alts) {
+  let best = null;
+  alts.forEach((text, rank) => {
+    const r = VB.parse(text, prepared);
+    const avg = r.lines.length ? r.lines.reduce((s, l) => s + l.match, 0) / r.lines.length : 0;
+    const score = r.lines.length * 10 - r.unknown.length * 2 + avg / 100 - rank * 0.5;
+    if (!best || score > best.score) best = { ...r, text, score };
+  });
+  return best;
+}
+
+function handleFinal(alts) {
+  alts = alts.map(a => a.trim()).filter(Boolean);
+  if (!alts.length) return;
+  const cmd = VB.command(alts[0]);
+  if (cmd) { runCommand(cmd); showHeard(alts[0], `command: ${cmd}`); return; }
+  const r = bestParse(alts);
+  if (!r.lines.length) { showHeard(r.text, "no item recognised", true); return; }
+  r.lines.forEach(l => BILL.push({ ...l, key: Date.now().toString(36) + Math.random().toString(36).slice(2, 6) }));
+  saveBill(); renderBill();
+  const added = r.lines.map(l => `${l.name} ${qtyLabel(l.qty, l.unit)}`).join(", ");
+  showHeard(r.text, "added " + added + (r.unknown.length ? ` · not understood: ${r.unknown.join(" ")}` : ""), r.unknown.length > 0);
+}
+
+function showHeard(text, result, warn) {
+  const h = $("heard"); h.textContent = "";
+  const t = document.createElement("div"); t.textContent = `“${text}”`;
+  const r = document.createElement("div"); r.className = warn ? "miss" : "status"; r.textContent = result;
+  h.append(t, r);
+}
+
+function runCommand(cmd) {
+  if (cmd === "undo") { const l = BILL.pop(); saveBill(); renderBill(); toast(l ? `Removed ${l.name}` : "Bill is empty"); }
+  if (cmd === "clear") { BILL = []; saveBill(); renderBill(); toast("New bill started"); }
+  if (cmd === "total") sayTotal();
+}
+
+/* ---------- the phone's own speech (inside the Android app) ---------- */
+const NATIVE = !!window.AndroidSpeech;
+let resumeAfterVoice = false;
+const itemNames = () => CAT.flatMap(c => [c.name, ...String(c.aliases).split(",")]).map(s => s.trim()).filter(Boolean);
+
+/* ---------- speaking the total ---------- */
+function sayTotal() {
+  const n = Math.round(billTotal() * 100) / 100;
+  const text = LANG === "kn-IN" ? `ಒಟ್ಟು ${n} ರೂಪಾಯಿ` : LANG === "hi-IN" ? `कुल ${n} रुपये` : `Total ${n} rupees`;
+  toast(text);
+  resumeAfterVoice = listening; if (listening) stopListening();
+  if (NATIVE) { AndroidSpeech.speak(text, LANG); return; }
+  if (!("speechSynthesis" in window)) return;
+  const u = new SpeechSynthesisUtterance(text); u.lang = LANG;
+  const v = speechSynthesis.getVoices().find(v => v.lang.replace("_", "-").startsWith(LANG.slice(0, 2))); if (v) u.voice = v;
+  u.onend = u.onerror = () => { if (resumeAfterVoice) { resumeAfterVoice = false; startListening(); } };
+  speechSynthesis.cancel(); speechSynthesis.speak(u);
+}
+
+/* ---------- speech recognition ---------- */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null, listening = false, offlineState = "unknown";
+const OFF_KEY = () => "voicebilling-offline-" + LANG;
+const LANG_NAME = { "kn-IN": "Kannada", "en-IN": "English", "hi-IN": "Hindi" };
+const ENGINE_LABEL = NATIVE ? {
+  available: () => `Offline ${LANG_NAME[LANG]} ready`, downloadable: () => `${LANG_NAME[LANG]} offline pack not downloaded`,
+  downloading: () => `Downloading ${LANG_NAME[LANG]} pack…`, online: () => `${LANG_NAME[LANG]} works only online on this phone`,
+  unavailable: () => `No offline ${LANG_NAME[LANG]} on this phone`, unknown: () => "Phone speech recognition"
+} : {
+  available: () => "Offline recognition ready", downloadable: () => "Offline pack can be downloaded", downloading: () => "Downloading offline pack…",
+  online: () => "Needs internet", unavailable: () => "No offline pack for this language; needs internet",
+  unsupported: () => "Uses online recognition (needs internet)", unknown: () => "Chrome speech recognition (may need internet)"
+};
+function showEngine() {
+  $("engine").textContent = (ENGINE_LABEL[offlineState] || ENGINE_LABEL.unknown)();
+  const btn = $("offlineBtn");
+  btn.hidden = (!SR && !NATIVE) || ["available", "unavailable", "unsupported", "online", "downloading"].includes(offlineState);
+  btn.textContent = offlineState === "downloadable" ? `Download ${LANG_NAME[LANG]} for offline use` : "Check offline mode";
+}
+
+async function checkOffline() {
+  if (NATIVE) { $("engine").textContent = "Checking offline mode…"; AndroidSpeech.checkOffline(LANG); return; }
+  if (!SR) { $("engine").textContent = "Speech recognition not available in this browser. Use Chrome."; $("mic").disabled = true; return; }
+  $("offlineBtn").disabled = true; $("engine").textContent = "Checking offline mode…";
+  try {
+    let st = null;
+    if (typeof SR.available === "function") st = await SR.available({ langs: [LANG], processLocally: true });
+    else if (typeof SR.availableOnDevice === "function") st = await SR.availableOnDevice(LANG);
+    offlineState = st || "unsupported";
+  } catch { offlineState = "unsupported"; }
+  save(OFF_KEY(), offlineState);
+  $("offlineBtn").disabled = false; showEngine();
+}
+async function installOffline() {
+  if (NATIVE) { AndroidSpeech.downloadOffline(LANG); return; }
+  $("offlineBtn").disabled = true; $("engine").textContent = "Downloading offline pack…";
+  try {
+    if (typeof SR.install === "function") await SR.install({ langs: [LANG], processLocally: true });
+    else if (typeof SR.installOnDevice === "function") await SR.installOnDevice(LANG);
+  } catch {}
+  $("offlineBtn").disabled = false; checkOffline();
+}
+$("offlineBtn").onclick = () => offlineState === "downloadable" ? installOffline() : checkOffline();
+
+function showInterim(text) { const h = $("heard"); h.textContent = ""; const s = document.createElement("span"); s.className = "interim"; s.textContent = text; h.append(s); }
+function micUi(on) {
+  $("mic").classList.toggle("on", on); $("mic").textContent = on ? "Stop" : "Speak"; $("mic").setAttribute("aria-pressed", String(on));
+}
+
+// Events from the Android app
+const NATIVE_ERRORS = {
+  "mic-denied": "Microphone not allowed. Allow it in Settings › Apps › Voice Billing › Permissions.",
+  "needs-offline-pack": "This language isn't downloaded for offline use. Tap the button above to download it.",
+  "language-not-supported": "The phone's recognizer doesn't support this language. Try another.",
+  "no-recognizer": "No speech recognizer on this phone. Install or update \"Speech Recognition & Synthesis\" from Google."
+};
+window.onNativeSpeech = ev => {
+  if (ev.type === "partial") showInterim(ev.texts[0] || "");
+  else if (ev.type === "final") handleFinal(ev.texts || []);
+  else if (ev.type === "ready") { if (listening) $("status").textContent = "Listening… say item and quantity."; }
+  else if (ev.type === "state") { if (!ev.listening && listening) { listening = false; micUi(false); } }
+  else if (ev.type === "error") { $("status").textContent = NATIVE_ERRORS[ev.code] || `Speech stopped (${ev.code}). Tap Speak to try again.`; if (ev.fatal) { listening = false; micUi(false); } }
+  else if (ev.type === "offline") { if (ev.lang === LANG) { offlineState = ev.state; save(OFF_KEY(), offlineState); showEngine(); } }
+  else if (ev.type === "ttsdone") { if (resumeAfterVoice) { resumeAfterVoice = false; startListening(); } }
+  else if (ev.type === "toast") toast(ev.text);
+};
+
+function startListening() {
+  if (NATIVE) {
+    AndroidSpeech.start(LANG, JSON.stringify(itemNames()));
+    listening = true; micUi(true);
+    $("status").textContent = "Starting…";
+    return;
+  }
+  if (!SR) return;
+  rec = new SR();
+  rec.lang = LANG; rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 3;
+  if (offlineState === "available" && "processLocally" in rec) rec.processLocally = true;
+  // Bias recognition towards this shop's item names where the browser supports it.
+  if (offlineState === "available" && window.SpeechRecognitionPhrase) {
+    try { rec.phrases = itemNames().slice(0, 200).map(p => new SpeechRecognitionPhrase(p, 3)); } catch {}
+  }
+  rec.onresult = e => {
+    let interim = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const r = e.results[i];
+      if (r.isFinal) handleFinal(Array.from(r).map(a => a.transcript));
+      else interim += r[0].transcript;
+    }
+    if (interim) showInterim(interim);
+  };
+  rec.onerror = e => {
+    const msg = { "not-allowed": "Microphone blocked. Allow it for Chrome and for this page.", "network": "Recognition needs internet for this language right now.", "language-not-supported": "This language isn't supported here. Try another.", "no-speech": "" }[e.error];
+    if (msg) { $("status").textContent = msg; if (e.error !== "no-speech") stopListening(); }
+  };
+  rec.onend = () => { if (listening) setTimeout(() => { try { rec.start(); } catch {} }, 250); };   // phones stop after a pause; keep going
+  try { rec.start(); } catch {}
+  listening = true; micUi(true);
+  $("status").textContent = "Listening… say item and quantity. Pause briefly between customers' lists.";
+}
+function stopListening() {
+  listening = false;
+  if (NATIVE) AndroidSpeech.stop();
+  else { try { rec && rec.stop(); } catch {} }
+  micUi(false);
+  $("status").textContent = "Stopped. Tap Speak to continue.";
+}
+
+/* ---------- wiring ---------- */
+function setLang(l) {
+  LANG = l; save("voicebilling-lang", l);
+  document.querySelectorAll(".chip").forEach(c => c.setAttribute("aria-pressed", String(c.dataset.lang === l)));
+  offlineState = load(OFF_KEY(), "unknown");
+  if (listening) { stopListening(); startListening(); }
+  if (NATIVE) { showEngine(); AndroidSpeech.checkOffline(l); return; }
+  if (!SR) { $("engine").textContent = "Speech recognition not available in this browser. Use Chrome."; $("mic").disabled = true; return; }
+  showEngine();
+}
+document.querySelectorAll(".chip").forEach(c => c.onclick = () => setLang(c.dataset.lang));
+$("mic").onclick = () => listening ? stopListening() : startListening();
+$("typedGo").onclick = () => { const v = $("typed").value; if (v.trim()) { handleFinal([v]); $("typed").value = ""; } };
+$("typed").addEventListener("keydown", e => { if (e.key === "Enter") $("typedGo").click(); });
+$("sayTotal").onclick = sayTotal;
+$("undo").onclick = () => runCommand("undo");
+$("newBill").onclick = () => runCommand("clear");
+$("copyBill").onclick = async () => {
+  const lines = BILL.map(l => `${l.name}  ${qtyLabel(l.qty, l.unit)}  ${rupees(l.qty * l.price)}`);
+  const text = lines.concat(["Total " + rupees(billTotal())]).join("\n");
+  if (NATIVE) { AndroidSpeech.copy(text); toast("Bill copied"); return; }
+  try { await navigator.clipboard.writeText(text); toast("Bill copied"); } catch { toast("Couldn't copy on this device"); }
+};
+$("addItem").onclick = () => { const id = Math.max(0, ...CAT.map(c => c.id)) + 1; CAT.push({ id, name: "New item", aliases: "", unit: "kg", price: 0 }); saveCat(); renderCat(); const el = $("cat-c-name-" + id); el && el.focus(); el && el.select(); };
+let resetArmed = false;
+$("resetCat").onclick = () => {
+  if (!resetArmed) { resetArmed = true; $("resetCat").textContent = "Tap again to replace your list"; setTimeout(() => { resetArmed = false; $("resetCat").textContent = "Restore example list"; }, 3000); return; }
+  CAT = EXAMPLE.map(x => ({ ...x })); saveCat(); renderCat(); toast("Example list restored");
+};
+
+prep(); renderCat(); renderBill(); setLang(LANG);
+})();
+</script>
+</body>
+</html>
