@@ -53,7 +53,9 @@ class MainActivity : Activity() {
         web.addJavascriptInterface(Bridge(), "AndroidSpeech")
         web.loadUrl("file:///android_asset/index.html")
 
-        tts = TextToSpeech(this) { }
+        // Google's voice has Kannada; Samsung's default voice often doesn't.
+        val googleTts = try { packageManager.getPackageInfo("com.google.android.tts", 0); true } catch (e: Exception) { false }
+        tts = if (googleTts) TextToSpeech(this, { }, "com.google.android.tts") else TextToSpeech(this) { }
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) {}
             override fun onDone(utteranceId: String?) { send(JSONObject().put("type", "ttsdone")) }

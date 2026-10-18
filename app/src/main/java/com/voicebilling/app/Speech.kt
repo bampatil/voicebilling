@@ -1,12 +1,15 @@
 package com.voicebilling.app
 
 import android.app.Activity
+import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.speech.RecognitionListener
+import android.speech.RecognitionService
 import android.speech.RecognitionSupport
 import android.speech.RecognitionSupportCallback
 import android.speech.RecognizerIntent
@@ -15,40 +18,61 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Listens continuously with Android's own speech recognizer.
- * Prefers the on-device recognizer (never goes online). Every event goes to the page as JSON.
- * All calls must happen on the main thread.
+ * Listens continuously with the phone's speech recognizer.
+ * - A language with an offline pack on this phone uses the on-device recognizer (never goes online).
+ * - Any other language (Kannada on most phones today) uses Google's online recognizer.
+ *   The app itself has no internet permission; Google's speech service makes the connection.
+ * Every event goes to the page as JSON. All calls must happen on the main thread.
  */
 class Speech(private val act: Activity, private val emit: (JSONObject) -> Unit) {
 
     private val main = Handler(Looper.getMainLooper())
-    private var rec: SpeechRecognizer? = null
-    private var onDevice = false
+    private var device: SpeechRecognizer? = null   // on-device, offline
+    private var cloud: SpeechRecognizer? = null    // Google online
+    private var active: SpeechRecognizer? = null
+    private var activeOffline = false
     private var listening = false
     private var lang = "kn-IN"
     private var phrases = ArrayList<String>()
     private var errorsInARow = 0
+    private val offline = HashMap<String, String>()   // language → last offline check result
 
-    private fun create(): SpeechRecognizer? {
-        rec?.destroy()
-        rec = null
-        onDevice = Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(act)
-        val r = when {
-            onDevice -> SpeechRecognizer.createOnDeviceSpeechRecognizer(act)
-            SpeechRecognizer.isRecognitionAvailable(act) -> SpeechRecognizer.createSpeechRecognizer(act)
-            else -> null
+    private fun deviceRec(): SpeechRecognizer? {
+        if (device == null && Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(act)) {
+            device = SpeechRecognizer.createOnDeviceSpeechRecognizer(act).also { it.setRecognitionListener(listener) }
         }
-        r?.setRecognitionListener(listener)
-        rec = r
-        return r
+        return device
     }
 
-    private fun intentFor(language: String) = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+    /** Google's recognizer when installed (Samsung phones default to Samsung's own), else the phone's default. */
+    private fun cloudRec(): SpeechRecognizer? {
+        if (cloud == null && SpeechRecognizer.isRecognitionAvailable(act)) {
+            val google = googleService()
+            cloud = (if (google != null) SpeechRecognizer.createSpeechRecognizer(act, google)
+                     else SpeechRecognizer.createSpeechRecognizer(act)).also { it.setRecognitionListener(listener) }
+        }
+        return cloud
+    }
+
+    private fun googleService(): ComponentName? {
+        val services = try {
+            act.packageManager.queryIntentServices(Intent(RecognitionService.SERVICE_INTERFACE), PackageManager.GET_META_DATA)
+        } catch (e: Exception) { emptyList() }
+        val order = listOf("com.google.android.googlequicksearchbox", "com.google.android.tts", "com.google.android.as")
+        for (pkg in order) {
+            val s = services.firstOrNull { it.serviceInfo?.packageName == pkg }?.serviceInfo ?: continue
+            return ComponentName(s.packageName, s.name)
+        }
+        return null
+    }
+
+    private fun intentFor(language: String, preferOffline: Boolean) = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
         putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, language)
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, preferOffline)
         putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
         // Nudge the recognizer towards this shop's item names (Android 13+).
         if (Build.VERSION.SDK_INT >= 33 && phrases.isNotEmpty()) {
@@ -59,8 +83,11 @@ class Speech(private val act: Activity, private val emit: (JSONObject) -> Unit) 
     fun start(language: String, itemNames: List<String>) {
         lang = language
         phrases = ArrayList(itemNames.filter { it.isNotBlank() }.take(100))
-        if (rec == null) create()
-        if (rec == null) {
+        try { active?.cancel() } catch (e: Exception) { }
+        val wantOffline = offline[language] == "available"
+        active = if (wantOffline) deviceRec() ?: cloudRec() else cloudRec() ?: deviceRec()
+        activeOffline = active != null && active === device
+        if (active == null) {
             listening = false
             emit(JSONObject().put("type", "error").put("code", "no-recognizer").put("fatal", true))
             emitState()
@@ -75,7 +102,7 @@ class Speech(private val act: Activity, private val emit: (JSONObject) -> Unit) 
     private fun listenOnce() {
         if (!listening) return
         try {
-            rec?.startListening(intentFor(lang))
+            active?.startListening(intentFor(lang, activeOffline))
         } catch (e: Exception) {
             main.postDelayed({ listenOnce() }, 500)
         }
@@ -88,19 +115,20 @@ class Speech(private val act: Activity, private val emit: (JSONObject) -> Unit) 
     fun stop() {
         listening = false
         main.removeCallbacksAndMessages(null)
-        try { rec?.cancel() } catch (e: Exception) { }
+        try { active?.cancel() } catch (e: Exception) { }
         emitState()
     }
 
     fun destroy() {
         listening = false
         main.removeCallbacksAndMessages(null)
-        try { rec?.destroy() } catch (e: Exception) { }
-        rec = null
+        try { device?.destroy() } catch (e: Exception) { }
+        try { cloud?.destroy() } catch (e: Exception) { }
+        device = null; cloud = null; active = null
     }
 
     private fun emitState() {
-        emit(JSONObject().put("type", "state").put("listening", listening).put("onDevice", onDevice))
+        emit(JSONObject().put("type", "state").put("listening", listening).put("offline", activeOffline))
     }
 
     private fun texts(b: Bundle?): JSONArray {
@@ -110,7 +138,7 @@ class Speech(private val act: Activity, private val emit: (JSONObject) -> Unit) 
 
     private val listener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {
-            emit(JSONObject().put("type", "ready"))
+            emit(JSONObject().put("type", "ready").put("offline", activeOffline))
         }
         override fun onBeginningOfSpeech() {}
         override fun onRmsChanged(rmsdB: Float) {}
@@ -136,14 +164,15 @@ class Speech(private val act: Activity, private val emit: (JSONObject) -> Unit) 
                 // Silence or nothing understood: just keep listening.
                 SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> restartSoon(100)
                 SpeechRecognizer.ERROR_RECOGNIZER_BUSY, SpeechRecognizer.ERROR_CLIENT -> {
-                    try { rec?.cancel() } catch (e: Exception) { }
+                    try { active?.cancel() } catch (e: Exception) { }
                     restartSoon(400)
                 }
                 SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> fatal("mic-denied")
                 SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
-                SpeechRecognizer.ERROR_SERVER, 11 /* ERROR_SERVER_DISCONNECTED */ -> fatal("needs-offline-pack")
+                SpeechRecognizer.ERROR_SERVER, 11 /* ERROR_SERVER_DISCONNECTED */ ->
+                    fatal(if (activeOffline) "needs-offline-pack" else "needs-internet")
                 12 /* ERROR_LANGUAGE_NOT_SUPPORTED */ -> fatal("language-not-supported")
-                13 /* ERROR_LANGUAGE_UNAVAILABLE */ -> fatal("needs-offline-pack")
+                13 /* ERROR_LANGUAGE_UNAVAILABLE */ -> fatal(if (activeOffline) "needs-offline-pack" else "language-not-supported")
                 else -> {
                     errorsInARow++
                     if (errorsInARow >= 5) fatal("error-$error") else restartSoon(500)
@@ -157,22 +186,18 @@ class Speech(private val act: Activity, private val emit: (JSONObject) -> Unit) 
         stop()
     }
 
-    /** Is this language available offline? Answers with "available", "downloading", "downloadable", "online" or "unavailable". */
+    /** Is this language available offline? Answers "available", "downloading", "downloadable", "online" or "unavailable". */
     fun checkOffline(language: String) {
-        if (Build.VERSION.SDK_INT < 33) {
-            emitOffline(language, if (Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(act)) "unknown" else "unavailable")
-            return
-        }
-        val r = rec ?: create()
+        if (Build.VERSION.SDK_INT < 33) { emitOffline(language, "unknown"); return }
+        val r = deviceRec()
         if (r == null) { emitOffline(language, "unavailable"); return }
         try {
-            r.checkRecognitionSupport(intentFor(language), act.mainExecutor, object : RecognitionSupportCallback {
+            r.checkRecognitionSupport(intentFor(language, true), act.mainExecutor, object : RecognitionSupportCallback {
                 override fun onSupportResult(s: RecognitionSupport) {
                     val state = when {
                         matches(s.installedOnDeviceLanguages, language) -> "available"
                         matches(s.pendingOnDeviceLanguages, language) -> "downloading"
                         matches(s.supportedOnDeviceLanguages, language) -> "downloadable"
-                        matches(s.onlineLanguages, language) -> "online"
                         else -> "unavailable"
                     }
                     emitOffline(language, state)
@@ -187,11 +212,10 @@ class Speech(private val act: Activity, private val emit: (JSONObject) -> Unit) 
     /** Asks the phone to download the offline speech pack for this language. */
     fun download(language: String) {
         if (Build.VERSION.SDK_INT < 33) { emitOffline(language, "unknown"); return }
-        val r = rec ?: create() ?: return
+        val r = deviceRec() ?: return
         try {
-            r.triggerModelDownload(intentFor(language))
+            r.triggerModelDownload(intentFor(language, true))
             emitOffline(language, "downloading")
-            // Check again after a while so the label updates by itself.
             main.postDelayed({ checkOffline(language) }, 20000)
         } catch (e: Exception) {
             emitOffline(language, "unknown")
@@ -203,11 +227,12 @@ class Speech(private val act: Activity, private val emit: (JSONObject) -> Unit) 
         val base = want.substringBefore('-')
         return list.any {
             val l = it.lowercase().replace('_', '-')
-            l == want || l == base || l.substringBefore('-') == base
+            l == want || l == base || (base != "en" && l.substringBefore('-') == base)
         }
     }
 
     private fun emitOffline(language: String, state: String) {
+        offline[language] = state
         emit(JSONObject().put("type", "offline").put("lang", language).put("state", state))
     }
 }

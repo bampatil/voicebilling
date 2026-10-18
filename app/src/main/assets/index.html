@@ -568,9 +568,9 @@ let rec = null, listening = false, offlineState = "unknown";
 const OFF_KEY = () => "voicebilling-offline-" + LANG;
 const LANG_NAME = { "kn-IN": "Kannada", "en-IN": "English", "hi-IN": "Hindi" };
 const ENGINE_LABEL = NATIVE ? {
-  available: () => `Offline ${LANG_NAME[LANG]} ready`, downloadable: () => `${LANG_NAME[LANG]} offline pack not downloaded`,
-  downloading: () => `Downloading ${LANG_NAME[LANG]} pack…`, online: () => `${LANG_NAME[LANG]} works only online on this phone`,
-  unavailable: () => `No offline ${LANG_NAME[LANG]} on this phone`, unknown: () => "Phone speech recognition"
+  available: () => `${LANG_NAME[LANG]}: offline`, downloadable: () => `${LANG_NAME[LANG]}: online now · offline pack available`,
+  downloading: () => `Downloading ${LANG_NAME[LANG]} pack… (online until done)`, online: () => `${LANG_NAME[LANG]}: Google online (needs internet)`,
+  unavailable: () => `${LANG_NAME[LANG]}: Google online (needs internet)`, unknown: () => `${LANG_NAME[LANG]}: Google online (needs internet)`
 } : {
   available: () => "Offline recognition ready", downloadable: () => "Offline pack can be downloaded", downloading: () => "Downloading offline pack…",
   online: () => "Needs internet", unavailable: () => "No offline pack for this language; needs internet",
@@ -616,13 +616,14 @@ function micUi(on) {
 const NATIVE_ERRORS = {
   "mic-denied": "Microphone not allowed. Allow it in Settings › Apps › Voice Billing › Permissions.",
   "needs-offline-pack": "This language isn't downloaded for offline use. Tap the button above to download it.",
+  "needs-internet": "No internet. On this phone this language is recognised by Google online. Connect and tap Speak.",
   "language-not-supported": "The phone's recognizer doesn't support this language. Try another.",
-  "no-recognizer": "No speech recognizer on this phone. Install or update \"Speech Recognition & Synthesis\" from Google."
+  "no-recognizer": "No speech recognizer on this phone. Install or update the Google app from the Play Store."
 };
 window.onNativeSpeech = ev => {
   if (ev.type === "partial") showInterim(ev.texts[0] || "");
   else if (ev.type === "final") handleFinal(ev.texts || []);
-  else if (ev.type === "ready") { if (listening) $("status").textContent = "Listening… say item and quantity."; }
+  else if (ev.type === "ready") { if (listening) $("status").textContent = `Listening ${ev.offline ? "offline" : "via Google online"}… say item and quantity.`; }
   else if (ev.type === "state") { if (!ev.listening && listening) { listening = false; micUi(false); } }
   else if (ev.type === "error") { $("status").textContent = NATIVE_ERRORS[ev.code] || `Speech stopped (${ev.code}). Tap Speak to try again.`; if (ev.fatal) { listening = false; micUi(false); } }
   else if (ev.type === "offline") { if (ev.lang === LANG) { offlineState = ev.state; save(OFF_KEY(), offlineState); showEngine(); } }
