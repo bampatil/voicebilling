@@ -155,30 +155,43 @@ class Speech(private val act: Activity, private val emit: (JSONObject) -> Unit) 
             errorsInARow = 0
             val t = texts(results)
             if (t.length() > 0) emit(JSONObject().put("type", "final").put("texts", t))
-            restartSoon(150)
+            restartSoon(50)
         }
 
         override fun onError(error: Int) {
             if (!listening) return
+            // Keeps listening until the shopkeeper says "stop" or taps Stop. Only a missing mic permission ends it.
             when (error) {
-                // Silence or nothing understood: just keep listening.
-                SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> restartSoon(100)
+                SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> restartSoon(50)
                 SpeechRecognizer.ERROR_RECOGNIZER_BUSY, SpeechRecognizer.ERROR_CLIENT -> {
                     try { active?.cancel() } catch (e: Exception) { }
-                    restartSoon(400)
+                    restartSoon(300)
                 }
                 SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> fatal("mic-denied")
                 SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
-                SpeechRecognizer.ERROR_SERVER, 11 /* ERROR_SERVER_DISCONNECTED */ ->
-                    fatal(if (activeOffline) "needs-offline-pack" else "needs-internet")
-                12 /* ERROR_LANGUAGE_NOT_SUPPORTED */ -> fatal("language-not-supported")
-                13 /* ERROR_LANGUAGE_UNAVAILABLE */ -> fatal(if (activeOffline) "needs-offline-pack" else "language-not-supported")
+                SpeechRecognizer.ERROR_SERVER, 11 /* ERROR_SERVER_DISCONNECTED */, 10 /* ERROR_TOO_MANY_REQUESTS */ -> {
+                    notice(if (activeOffline) "needs-offline-pack" else "needs-internet")
+                    restartSoon(2000)
+                }
+                12 /* ERROR_LANGUAGE_NOT_SUPPORTED */, 13 /* ERROR_LANGUAGE_UNAVAILABLE */ -> {
+                    // The offline recognizer can't do this language: switch to Google online and carry on.
+                    if (activeOffline && cloudRec() != null) {
+                        offline[lang] = "unavailable"
+                        active = cloud; activeOffline = false
+                        emitState()
+                        restartSoon(100)
+                    } else fatal("language-not-supported")
+                }
                 else -> {
                     errorsInARow++
-                    if (errorsInARow >= 5) fatal("error-$error") else restartSoon(500)
+                    restartSoon(if (errorsInARow > 5) 2000 else 300)
                 }
             }
         }
+    }
+
+    private fun notice(code: String) {
+        emit(JSONObject().put("type", "error").put("code", code).put("fatal", false))
     }
 
     private fun fatal(code: String) {

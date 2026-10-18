@@ -65,6 +65,18 @@ td.num,th.num{text-align:right}
 .cat td{border-bottom:1px solid var(--line);padding:6px 4px}
 .cat .c-name{min-width:7rem}.cat .c-alias{min-width:10rem}.cat .c-price{width:5.5rem}
 .hint{font-size:13px;color:var(--muted);margin:8px 0 0}
+button.primary{background:var(--ink);color:#fff;border-color:var(--ink);font-weight:600}
+.sugg{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;align-items:center;font-size:13px;color:var(--muted)}
+.sugg button{padding:6px 12px;border-radius:999px;font-size:14px;border-color:var(--ink);color:var(--ink)}
+.check{display:flex;gap:8px;align-items:center;font-size:14px;margin-top:12px}
+.check input{width:18px;height:18px;accent-color:var(--ink)}
+.voicehelp{margin-top:10px;font-size:14px}
+.voicehelp summary{cursor:pointer;color:var(--ink);padding:4px 0}
+.voicehelp ul{margin:6px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:4px}
+.heardlog{list-style:none;padding-left:0!important;font-size:13px}
+.heardlog li{border-top:1px dashed var(--line);padding:6px 0}
+.heardlog time{color:var(--muted);font-family:var(--mono);margin-right:6px}
+.heardlog .res{display:block;color:var(--muted)}
 .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:8px 14px;border-radius:999px;font-size:14px}
 </style>
 </head>
@@ -89,6 +101,7 @@ td.num,th.num{text-align:right}
       </div>
     </div>
     <div class="heard" id="heard" aria-live="polite"><span class="interim">What you say appears here.</span></div>
+    <div class="sugg" id="sugg" hidden></div>
     <div class="typerow">
       <input type="text" id="typed" placeholder="Or type to test: 2 kg akki ardha kg sakkare" aria-label="Type items to test">
       <button id="typedGo">Add</button>
@@ -106,12 +119,29 @@ td.num,th.num{text-align:right}
     <p class="empty" id="billEmpty">No items yet.</p>
     <div class="totalrow"><span id="itemCount">0 items</span><b id="total">₹0</b></div>
     <div class="actions">
-      <button id="sayTotal">Read total aloud</button>
-      <button id="undo">Remove last</button>
+      <button id="readBack" class="primary">Read bill back</button>
+      <button id="sayTotal">Read total</button>
+      <button id="undo">Undo</button>
       <button id="newBill">New bill</button>
-      <button id="copyBill">Copy bill</button>
+      <button id="copyBill">Copy</button>
     </div>
-    <p class="hint">Voice commands: "ಒಟ್ಟು" / "total" reads the total, "ತೆಗಿ" / "cancel" removes the last item, "ಹೊಸ ಬಿಲ್" / "new bill" clears.</p>
+    <label class="check"><input type="checkbox" id="needQty"> Add only when a quantity is said</label>
+    <details class="voicehelp">
+      <summary>Voice commands</summary>
+      <ul>
+        <li><b>ಬಿಲ್ ಓದಿ</b> / "read bill": read every item and the total</li>
+        <li><b>ಒಟ್ಟು</b> / "total": read the total</li>
+        <li><b>ತೆಗಿ</b> / "cancel": undo the last change</li>
+        <li><b>ಹೊಸ ಬಿಲ್</b> / "new bill": start again</li>
+        <li><b>ನಿಲ್ಲಿಸು</b> / "stop": stop listening</li>
+        <li><b>ಸಕ್ಕರೆ ಬೆಲೆ 50</b> / "sugar price 50": change a price</li>
+        <li><b>ಹೊಸ ಐಟಂ ಬಾದಾಮಿ 800 ಕೆಜಿ</b> / "add item cashew 900 per kg": add a new item</li>
+      </ul>
+    </details>
+    <details class="voicehelp">
+      <summary>What it heard</summary>
+      <ul class="heardlog" id="heardLog"></ul>
+    </details>
   </section>
 
   <section aria-label="Catalogue">
@@ -191,7 +221,7 @@ const VB = (() => {
   const NUM_WORDS = {
     // Kannada
     ondu:1, ond:1, ondhu:1, eradu:2, yeradu:2, erdu:2, mooru:3, muru:3, naalku:4, nalku:4, aidu:5, aydu:5, aaru:6, elu:7, yelu:7,
-    entu:8, yentu:8, ombattu:9, hattu:10, hannondu:11, hanneradu:12, hadinaidu:15, ippattu:20, mattu_:0,
+    entu:8, yentu:8, ombattu:9, hattu:10, hannondu:11, hanneradu:12, hadinaidu:15, ippattu:20, muvattu:30, moovattu:30, nalavattu:40, aivattu:50, aravattu:60, eppattu:70, embattu:80, tombattu:90, mattu_:0,
     nooru:100, innooru:200, munnooru:300, naanooru:400, ainooru:500, saavira:1000,
     // English
     one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8, nine:9, ten:10, eleven:11, twelve:12, fifteen:15,
@@ -213,11 +243,12 @@ const VB = (() => {
     dozen:"dozen", dajan:"dozen", darjan:"dozen", dazan:"dozen"
   };
   const FILLER = ["of","the","a","an","and","please","pls","ok","okay","mattu","matte","aur","bhi","kodi","kodu","kottu","beku","beko","haaki","haku",
-    "ge","ke","ka","ki","sir","madam","anna","akka","guru","saar","nanage","nange","mujhe","chahiye","dena","do_", "aaytu","ayitu","illi","alli","inna","innu"];
+    "ge","ke","ka","ki","per","rupayi","rupaayi","rupay","sir","madam","anna","akka","guru","saar","nanage","nange","mujhe","chahiye","dena","do_", "aaytu","ayitu","illi","alli","inna","innu"];
 
   const keyMap = obj => { const m = new Map(); for (const k in obj) m.set(phon(k), obj[k]); return m; };
   const NUMK = keyMap(NUM_WORDS), FRACK = keyMap(FRAC_WORDS), FIXK = keyMap(FIXED_QTY), UNITK = keyMap(UNIT_WORDS);
   const FILLK = new Set(FILLER.map(phon));
+  const KWK = new Set(["price", "prices", "rate", "rates", "daam", "kimmat", "kimat"].map(phon));
 
   const UNIT_KIND = { kg:["w",1000], g:["w",1], l:["v",1000], ml:["v",1], packet:["c",1], piece:["c",1], dozen:["c",12] };
 
@@ -239,6 +270,7 @@ const VB = (() => {
       else if (FRACK.has(k)) t = { w, k, type: "frac", v: FRACK.get(k) };
       else if (UNITK.has(k)) t = { w, k, type: "unit", u: UNITK.get(k) };
       else if (FILLK.has(k)) t = { w, k, type: "fill" };
+      else if (KWK.has(k)) t = { w, k, type: "kw" };   // "price", "rate": never an item name
       return t;
     });
   }
@@ -320,6 +352,7 @@ const VB = (() => {
       if (t.type === "num") {
         if ((t.v === 100 || t.v === 1000) && num !== null && num < 10) num *= t.v;     // "two hundred", "eradu nooru"
         else if (num !== null && num >= 100 && t.v < 100) num += t.v;                 // "nooru aivattu" style
+        else if (num !== null && num >= 20 && num < 100 && num % 10 === 0 && t.v < 10 && t.v >= 1) num += t.v;   // "aivattu aidu" = 55
         else if (num !== null && t.v < 1) num += t.v;
         else num = (num !== null && num < 1) ? num + t.v : t.v;
       } else if (t.type === "frac") num = num === null ? t.v : num + t.v;               // "ondu vare", "one and half"
@@ -375,12 +408,12 @@ const VB = (() => {
       const { qty, note } = toItemUnit(q, m.item.unit);
       return { id: m.item.id, name: m.item.name, unit: m.item.unit, price: Number(m.item.price) || 0,
                qty: Math.round(qty * 1000) / 1000, heard: toks.slice(run && run.start < m.start ? run.start : m.start, run && run.end > m.end ? run.end : m.end).map(t => t.w).join(" "),
-               match: Math.round(m.s * 100), note };
+               match: Math.round(m.s * 100), note, qtySaid: !!q };
     });
     const covered = new Set();
     items.forEach(m => { for (let k = m.start; k < m.end; k++) covered.add(k); });
     runs.forEach(r => { if (usedRuns.has(r)) for (let k = r.start; k < r.end; k++) covered.add(k); });
-    const unknown = toks.filter((t, i) => !covered.has(i) && t.type !== "fill").map(t => t.w);
+    const unknown = toks.filter((t, i) => !covered.has(i) && t.type !== "fill" && t.type !== "kw").map(t => t.w);
     return { lines, unknown, tokens: toks.map(t => t.w).join(" ") };
   }
 
@@ -388,7 +421,9 @@ const VB = (() => {
   const CMD = {
     undo: ["cancel", "remove", "remove last", "delete", "tegi", "tegeyiri", "beda", "hatao", "galat", "wrong"],
     clear: ["clear", "new bill", "hosa bill", "naya bill", "clear bill"],
-    total: ["total", "ottu", "ottu eshtu", "kitna hua", "eshtu aaytu", "bill"]
+    total: ["total", "ottu", "ottu eshtu", "kitna hua", "eshtu aaytu"],
+    readback: ["read", "read bill", "read back", "bill odi", "odi", "list odi", "bill heli", "padho", "bill padho", "bill sunao", "repeat", "list"],
+    stop: ["stop", "stop listening", "nillisu", "nilsu", "ruko", "band karo", "bas"]
   };
   const CMDK = Object.fromEntries(Object.entries(CMD).map(([k, v]) => [k, v.map(phon)]));
   function command(text) {
@@ -397,7 +432,41 @@ const VB = (() => {
     return null;
   }
 
-  return { parse, prepareCatalogue, command, phon, translitKannada, tokenize };
+  /* ---- 9. Setting prices by voice ----
+     "ಸಕ್ಕರೆ ಬೆಲೆ ಐವತ್ತು" / "sugar price 50"      → change an item's price
+     "ಹೊಸ ಐಟಂ ಬಾದಾಮಿ 800 ಕೆಜಿ" / "add item badam 800 per kg" → new item */
+  const PRICE_KW = new Set(["price", "rate", "bele", "daam", "dam", "kimmat", "kimat", "rait", "ret"].map(phon));
+  const ADD_A = new Set(["add", "hosa", "naya", "new", "hosadu"].map(phon));
+  const ADD_B = new Set(["item", "items", "saman", "samanu", "vastu", "product", "aitam", "aitum"].map(phon));
+  function priceCommand(text, catalogue) {
+    const cat = catalogue[0] && catalogue[0].keys ? catalogue : prepareCatalogue(catalogue);
+    const toks = tokenize(text);
+    let addAt = -1;
+    toks.forEach((t, i) => { if (ADD_A.has(t.k) && toks[i + 1] && ADD_B.has(toks[i + 1].k)) addAt = i; });
+    const items = findItems(toks, cat).filter(m => addAt < 0 || m.end <= addAt || m.start > addAt + 1);
+    const inItem = i => items.some(m => i >= m.start && i < m.end);
+    const priceAt = toks.findIndex((t, i) => (t.type === "kw" || PRICE_KW.has(t.k)) && !inItem(i));
+    if (addAt < 0 && priceAt < 0) return null;
+    const nums = toks.filter(t => t.type === "num" || t.type === "frac");
+    if (!nums.length) return null;
+    const price = readQty(nums).n;
+    const unitTok = toks.filter(t => t.type === "unit").pop();
+    const unit = unitTok ? (unitTok.u === "dozen" ? "piece" : unitTok.u) : null;
+    if (items.length && (addAt < 0 || items[0].s >= 0.9)) {
+      const it = items[0].item;
+      return { kind: "price", id: it.id, name: it.name, price, unit };
+    }
+    if (addAt < 0) return null;
+    const nameToks = toks.filter((t, i) => t.type === "word" && i !== addAt && i !== addAt + 1 && !PRICE_KW.has(t.k));
+    if (!nameToks.length) return null;
+    const keys = new Set(nameToks.map(t => t.k));
+    // Keep the words as they were heard (Kannada script etc.) as an extra name.
+    const original = String(text).split(/\s+/).filter(w => keys.has(phon(w))).join(" ");
+    const name = nameToks.map(t => t.w.charAt(0).toUpperCase() + t.w.slice(1)).join(" ");
+    return { kind: "new", name, alias: original && original.toLowerCase() !== name.toLowerCase() ? original : "", price, unit: unit || "piece" };
+  }
+
+  return { parse, prepareCatalogue, command, priceCommand, phon, translitKannada, tokenize };
 })();
 if (typeof module !== "undefined") module.exports = VB;
 
@@ -506,28 +575,93 @@ function renderCat() {
 }
 
 /* ---------- understanding what was said ---------- */
+let NEED_QTY = load("voicebilling-needqty", true);
+let UNDO = [];                     // last changes, newest last: {t:"add",key} | {t:"qty",key,prev} | {t:"cat",prev}
+let LOG = load("voicebilling-heard", []);
+const newKey = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
 function bestParse(alts) {
   let best = null;
   alts.forEach((text, rank) => {
     const r = VB.parse(text, prepared);
     const avg = r.lines.length ? r.lines.reduce((s, l) => s + l.match, 0) / r.lines.length : 0;
-    const score = r.lines.length * 10 - r.unknown.length * 2 + avg / 100 - rank * 0.5;
+    const said = r.lines.filter(l => l.qtySaid).length;
+    const score = said * 12 + r.lines.length * 10 - r.unknown.length * 2 + avg / 100 - rank * 0.5;
     if (!best || score > best.score) best = { ...r, text, score };
   });
   return best;
 }
 
+// Adds one line, handling repeats: same item and same quantity again = a repeat, ignored;
+// same item with a new quantity = a correction, the quantity is replaced (Undo puts it back).
+function addLine(l) {
+  const existing = [...BILL].reverse().find(b => b.id === l.id);
+  if (existing && Math.abs(existing.qty - l.qty) < 1e-6) return `${l.name} already in bill`;
+  if (existing) {
+    UNDO.push({ t: "qty", key: existing.key, prev: existing.qty, prevHeard: existing.heard });
+    const was = qtyLabel(existing.qty, existing.unit);
+    existing.qty = l.qty; existing.heard = l.heard;
+    return `${l.name} changed ${was} → ${qtyLabel(l.qty, l.unit)}`;
+  }
+  const key = newKey();
+  BILL.push({ ...l, key });
+  UNDO.push({ t: "add", key });
+  return `added ${l.name} ${qtyLabel(l.qty, l.unit)}`;
+}
+
 function handleFinal(alts) {
   alts = alts.map(a => a.trim()).filter(Boolean);
   if (!alts.length) return;
+  showSugg([]);
   const cmd = VB.command(alts[0]);
-  if (cmd) { runCommand(cmd); showHeard(alts[0], `command: ${cmd}`); return; }
+  if (cmd) { logHeard(alts[0], `command: ${cmd}`); showHeard(alts[0], `command: ${cmd}`); runCommand(cmd); return; }
+
+  for (const text of alts.slice(0, 2)) {
+    const pc = VB.priceCommand(text, prepared);
+    if (pc) { const msg = applyPrice(pc); logHeard(text, msg); showHeard(text, msg); return; }
+  }
+
   const r = bestParse(alts);
-  if (!r.lines.length) { showHeard(r.text, "no item recognised", true); return; }
-  r.lines.forEach(l => BILL.push({ ...l, key: Date.now().toString(36) + Math.random().toString(36).slice(2, 6) }));
+  const sure = r.lines.filter(l => l.qtySaid || !NEED_QTY);
+  const maybe = r.lines.filter(l => !l.qtySaid && NEED_QTY);
+  if (!sure.length) {
+    const msg = maybe.length ? "item named without a quantity · tap to add" : "no item · ignored";
+    logHeard(r.text, msg); showHeard(r.text, msg, false); showSugg(maybe);
+    return;
+  }
+  const notes = sure.map(addLine);
   saveBill(); renderBill();
-  const added = r.lines.map(l => `${l.name} ${qtyLabel(l.qty, l.unit)}`).join(", ");
-  showHeard(r.text, "added " + added + (r.unknown.length ? ` · not understood: ${r.unknown.join(" ")}` : ""), r.unknown.length > 0);
+  const msg = notes.join(" · ") + (r.unknown.length > 3 ? " · other talk ignored" : "");
+  logHeard(r.text, msg); showHeard(r.text, msg); showSugg(maybe);
+}
+
+function applyPrice(pc) {
+  UNDO.push({ t: "cat", prev: JSON.parse(JSON.stringify(CAT)), prevBill: JSON.parse(JSON.stringify(BILL)) });
+  if (pc.kind === "price") {
+    const c = CAT.find(x => x.id === pc.id); if (!c) return "item not found";
+    c.price = pc.price; if (pc.unit) c.unit = pc.unit;
+    // Lines already on this bill use the new price too.
+    BILL.forEach(b => { if (b.id === c.id && b.unit === c.unit) b.price = c.price; });
+    saveCat(); renderCat(); saveBill(); renderBill();
+    const msg = `${c.name} price set to ${rupees(pc.price)}/${unitShort(c.unit)}`; toast(msg); return msg;
+  }
+  const id = Math.max(0, ...CAT.map(c => c.id)) + 1;
+  CAT.push({ id, name: pc.name, aliases: pc.alias, unit: pc.unit, price: pc.price });
+  saveCat(); renderCat();
+  const msg = `new item ${pc.name} at ${rupees(pc.price)}/${unitShort(pc.unit)}`; toast(msg); return msg;
+}
+const unitShort = u => u === "l" ? "L" : u;
+
+function showSugg(lines) {
+  const box = $("sugg"); box.textContent = "";
+  box.hidden = !lines.length;
+  if (!lines.length) return;
+  box.append("Add?");
+  lines.forEach(l => {
+    const b = document.createElement("button"); b.textContent = `+ ${l.name}`;
+    b.onclick = () => { const m = addLine(l); saveBill(); renderBill(); toast(m); b.remove(); if (!box.querySelector("button")) box.hidden = true; };
+    box.append(b);
+  });
 }
 
 function showHeard(text, result, warn) {
@@ -536,11 +670,35 @@ function showHeard(text, result, warn) {
   const r = document.createElement("div"); r.className = warn ? "miss" : "status"; r.textContent = result;
   h.append(t, r);
 }
+function logHeard(text, result) {
+  LOG.unshift({ t: Date.now(), text, result }); LOG = LOG.slice(0, 30); save("voicebilling-heard", LOG); renderLog();
+}
+function renderLog() {
+  const ul = $("heardLog"); ul.textContent = "";
+  if (!LOG.length) { const li = document.createElement("li"); li.textContent = "Nothing yet."; ul.append(li); return; }
+  LOG.forEach(e => {
+    const li = document.createElement("li"); const tm = document.createElement("time"); const res = document.createElement("span");
+    tm.textContent = new Date(e.t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    res.className = "res"; res.textContent = e.result;
+    li.append(tm, document.createTextNode(`“${e.text}”`), res); ul.append(li);
+  });
+}
+
+function undoLast() {
+  const u = UNDO.pop();
+  if (!u) { const l = BILL.pop(); saveBill(); renderBill(); toast(l ? `Removed ${l.name}` : "Nothing to undo"); return; }
+  if (u.t === "add") { const i = BILL.findIndex(b => b.key === u.key); if (i >= 0) { toast(`Removed ${BILL[i].name}`); BILL.splice(i, 1); } }
+  if (u.t === "qty") { const b = BILL.find(b => b.key === u.key); if (b) { b.qty = u.prev; b.heard = u.prevHeard; toast(`${b.name} back to ${qtyLabel(b.qty, b.unit)}`); } }
+  if (u.t === "cat") { CAT = u.prev; if (u.prevBill) BILL = u.prevBill; saveCat(); renderCat(); toast("Price change undone"); }
+  saveBill(); renderBill();
+}
 
 function runCommand(cmd) {
-  if (cmd === "undo") { const l = BILL.pop(); saveBill(); renderBill(); toast(l ? `Removed ${l.name}` : "Bill is empty"); }
-  if (cmd === "clear") { BILL = []; saveBill(); renderBill(); toast("New bill started"); }
+  if (cmd === "undo") undoLast();
+  if (cmd === "clear") { BILL = []; UNDO = []; saveBill(); renderBill(); toast("New bill started"); }
   if (cmd === "total") sayTotal();
+  if (cmd === "readback") readBack();
+  if (cmd === "stop") stopListening();
 }
 
 /* ---------- the phone's own speech (inside the Android app) ---------- */
@@ -548,11 +706,31 @@ const NATIVE = !!window.AndroidSpeech;
 let resumeAfterVoice = false;
 const itemNames = () => CAT.flatMap(c => [c.name, ...String(c.aliases).split(",")]).map(s => s.trim()).filter(Boolean);
 
-/* ---------- speaking the total ---------- */
-function sayTotal() {
-  const n = Math.round(billTotal() * 100) / 100;
-  const text = LANG === "kn-IN" ? `ಒಟ್ಟು ${n} ರೂಪಾಯಿ` : LANG === "hi-IN" ? `कुल ${n} रुपये` : `Total ${n} rupees`;
-  toast(text);
+/* ---------- speaking: total and read-back ---------- */
+const SAY = {
+  "kn-IN": { total: n => `ಒಟ್ಟು ${n} ರೂಪಾಯಿ`, rs: n => `${n} ರೂಪಾಯಿ`, empty: "ಬಿಲ್ ಖಾಲಿ ಇದೆ",
+    units: { kg: "ಕೆಜಿ", g: "ಗ್ರಾಂ", l: "ಲೀಟರ್", ml: "ಎಂ ಎಲ್", packet: "ಪ್ಯಾಕೆಟ್", piece: "" },
+    frac: { 0.5: "ಅರ್ಧ", 0.25: "ಕಾಲು", 0.75: "ಮುಕ್ಕಾಲು", 1.5: "ಒಂದೂವರೆ", 2.5: "ಎರಡೂವರೆ" }, script: /[ಀ-೿]/ },
+  "hi-IN": { total: n => `कुल ${n} रुपये`, rs: n => `${n} रुपये`, empty: "बिल खाली है",
+    units: { kg: "किलो", g: "ग्राम", l: "लीटर", ml: "एम एल", packet: "पैकेट", piece: "" },
+    frac: { 0.5: "आधा", 0.25: "पाव", 0.75: "पौना", 1.5: "डेढ़", 2.5: "ढाई" }, script: /[ऀ-ॿ]/ },
+  "en-IN": { total: n => `Total ${n} rupees`, rs: n => `${n} rupees`, empty: "The bill is empty",
+    units: { kg: "kg", g: "grams", l: "litre", ml: "ml", packet: "packet", piece: "" },
+    frac: { 0.5: "half", 0.25: "quarter", 0.75: "three quarter", 1.5: "one and a half" }, script: /[A-Za-z]/ }
+};
+function spokenName(line) {
+  const sp = SAY[LANG]; const c = CAT.find(x => x.id === line.id);
+  if (LANG !== "en-IN" && c) { const a = String(c.aliases).split(",").map(s => s.trim()).find(a => sp.script.test(a)); if (a) return a; }
+  return line.name;
+}
+function spokenQty(line) {
+  const sp = SAY[LANG]; let q = line.qty, u = line.unit;
+  if (u === "kg" && q < 1 && !sp.frac[q]) { q = Math.round(q * 1000); u = "g"; }
+  if (u === "l" && q < 1 && !sp.frac[q]) { q = Math.round(q * 1000); u = "ml"; }
+  return `${sp.frac[q] || +q.toFixed(3)} ${sp.units[u] ?? u}`.trim();
+}
+function speakText(text) {
+  toast(text.length > 60 ? "Reading the bill…" : text);
   resumeAfterVoice = listening; if (listening) stopListening();
   if (NATIVE) { AndroidSpeech.speak(text, LANG); return; }
   if (!("speechSynthesis" in window)) return;
@@ -560,6 +738,14 @@ function sayTotal() {
   const v = speechSynthesis.getVoices().find(v => v.lang.replace("_", "-").startsWith(LANG.slice(0, 2))); if (v) u.voice = v;
   u.onend = u.onerror = () => { if (resumeAfterVoice) { resumeAfterVoice = false; startListening(); } };
   speechSynthesis.cancel(); speechSynthesis.speak(u);
+}
+const money = n => Math.round(n * 100) / 100;
+function sayTotal() { speakText(SAY[LANG].total(money(billTotal()))); }
+function readBack() {
+  const sp = SAY[LANG];
+  if (!BILL.length) { speakText(sp.empty); return; }
+  const parts = BILL.map(l => `${spokenName(l)}, ${spokenQty(l)}, ${sp.rs(money(l.qty * l.price))}`);
+  speakText(parts.join(". ") + ". " + sp.total(money(billTotal())));
 }
 
 /* ---------- speech recognition ---------- */
@@ -616,7 +802,7 @@ function micUi(on) {
 const NATIVE_ERRORS = {
   "mic-denied": "Microphone not allowed. Allow it in Settings › Apps › Voice Billing › Permissions.",
   "needs-offline-pack": "This language isn't downloaded for offline use. Tap the button above to download it.",
-  "needs-internet": "No internet. On this phone this language is recognised by Google online. Connect and tap Speak.",
+  "needs-internet": "No internet right now. Kannada needs Google online on this phone; it will continue when the connection is back.",
   "language-not-supported": "The phone's recognizer doesn't support this language. Try another.",
   "no-recognizer": "No speech recognizer on this phone. Install or update the Google app from the Play Store."
 };
@@ -624,8 +810,14 @@ window.onNativeSpeech = ev => {
   if (ev.type === "partial") showInterim(ev.texts[0] || "");
   else if (ev.type === "final") handleFinal(ev.texts || []);
   else if (ev.type === "ready") { if (listening) $("status").textContent = `Listening ${ev.offline ? "offline" : "via Google online"}… say item and quantity.`; }
-  else if (ev.type === "state") { if (!ev.listening && listening) { listening = false; micUi(false); } }
-  else if (ev.type === "error") { $("status").textContent = NATIVE_ERRORS[ev.code] || `Speech stopped (${ev.code}). Tap Speak to try again.`; if (ev.fatal) { listening = false; micUi(false); } }
+  else if (ev.type === "state") {
+    if (!ev.listening && listening) { listening = false; micUi(false); }
+    else if (ev.listening && !listening) { listening = true; micUi(true); $("status").textContent = "Listening again."; }
+  }
+  else if (ev.type === "error") {
+    $("status").textContent = (NATIVE_ERRORS[ev.code] || `Speech problem (${ev.code}).`) + (ev.fatal ? "" : " Still listening…");
+    if (ev.fatal) { listening = false; micUi(false); }
+  }
   else if (ev.type === "offline") { if (ev.lang === LANG) { offlineState = ev.state; save(OFF_KEY(), offlineState); showEngine(); } }
   else if (ev.type === "ttsdone") { if (resumeAfterVoice) { resumeAfterVoice = false; startListening(); } }
   else if (ev.type === "toast") toast(ev.text);
@@ -688,6 +880,9 @@ $("typedGo").onclick = () => { const v = $("typed").value; if (v.trim()) { handl
 $("typed").addEventListener("keydown", e => { if (e.key === "Enter") $("typedGo").click(); });
 $("sayTotal").onclick = sayTotal;
 $("undo").onclick = () => runCommand("undo");
+$("readBack").onclick = readBack;
+$("needQty").checked = NEED_QTY;
+$("needQty").onchange = () => { NEED_QTY = $("needQty").checked; save("voicebilling-needqty", NEED_QTY); };
 $("newBill").onclick = () => runCommand("clear");
 $("copyBill").onclick = async () => {
   const lines = BILL.map(l => `${l.name}  ${qtyLabel(l.qty, l.unit)}  ${rupees(l.qty * l.price)}`);
@@ -702,7 +897,7 @@ $("resetCat").onclick = () => {
   CAT = EXAMPLE.map(x => ({ ...x })); saveCat(); renderCat(); toast("Example list restored");
 };
 
-prep(); renderCat(); renderBill(); setLang(LANG);
+prep(); renderCat(); renderBill(); renderLog(); setLang(LANG);
 })();
 </script>
 </body>

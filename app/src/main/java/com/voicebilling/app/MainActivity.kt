@@ -32,6 +32,8 @@ class MainActivity : Activity() {
     private lateinit var speech: Speech
     private var tts: TextToSpeech? = null
     private var pending: Pair<String, List<String>>? = null
+    private var lastStart: Pair<String, List<String>>? = null
+    private var resumeListening = false
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -74,11 +76,11 @@ class MainActivity : Activity() {
             val names = try {
                 val a = JSONArray(namesJson); List(a.length()) { a.optString(it) }
             } catch (e: Exception) { emptyList() }
-            main.post { startWithPermission(lang, names) }
+            main.post { lastStart = lang to names; startWithPermission(lang, names) }
         }
 
         @JavascriptInterface
-        fun stop() { main.post { speech.stop() } }
+        fun stop() { main.post { lastStart = null; speech.stop() } }
 
         @JavascriptInterface
         fun checkOffline(lang: String) { main.post { speech.checkOffline(lang) } }
@@ -131,9 +133,20 @@ class MainActivity : Activity() {
         }
     }
 
+    // Leaving the app pauses listening; coming back picks up again.
     override fun onPause() {
         super.onPause()
+        resumeListening = lastStart != null && pending == null
         speech.stop()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val s = lastStart
+        if (resumeListening && s != null) {
+            resumeListening = false
+            startWithPermission(s.first, s.second)
+        }
     }
 
     override fun onDestroy() {

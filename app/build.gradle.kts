@@ -11,8 +11,8 @@ android {
         applicationId = "com.voicebilling.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.2"
+        versionCode = 3
+        versionName = "0.3"
     }
 
     // Fixed signing key so every new build installs over the previous one.
