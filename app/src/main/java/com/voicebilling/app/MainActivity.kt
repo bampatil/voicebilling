@@ -30,6 +30,9 @@ class MainActivity : Activity() {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var web: WebView
     private lateinit var speech: Speech
+    private lateinit var store: ModelStore
+    private lateinit var local: LocalSpeech
+    private var useLocal = true   // offline Kannada model when downloaded; the page can switch to Google
     private var tts: TextToSpeech? = null
     private var pending: Pair<String, List<String>>? = null
     private var lastStart: Pair<String, List<String>>? = null
@@ -46,12 +49,14 @@ class MainActivity : Activity() {
         web.settings.domStorageEnabled = true
         web.settings.allowFileAccess = true
         web.settings.mediaPlaybackRequiresUserGesture = false
-        // Stay on our own page; the app has no internet access anyway.
+        // Stay on our own page.
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = true
         }
 
         speech = Speech(this) { send(it) }
+        store = ModelStore(this) { send(it) }
+        local = LocalSpeech(this, store) { send(it) }
         web.addJavascriptInterface(Bridge(), "AndroidSpeech")
         web.loadUrl("file:///android_asset/index.html")
 
@@ -80,7 +85,26 @@ class MainActivity : Activity() {
         }
 
         @JavascriptInterface
-        fun stop() { main.post { lastStart = null; speech.stop() } }
+        fun stop() { main.post { lastStart = null; speech.stop(); local.stop() } }
+
+        // Offline Kannada model
+        @JavascriptInterface
+        fun modelStatus() { main.post { store.status() } }
+
+        @JavascriptInterface
+        fun downloadModel() { main.post { store.download() } }
+
+        @JavascriptInterface
+        fun deleteModel() { main.post { local.stop(); store.delete() } }
+
+        @JavascriptInterface
+        fun setEngine(offline: Boolean) { main.post { useLocal = offline } }
+
+        @JavascriptInterface
+        fun setMic(gain: Float, sensitivity: Float) {
+            local.gain = gain.coerceIn(0.5f, 6f)
+            local.sensitivity = sensitivity.coerceIn(0.2f, 0.8f)
+        }
 
         @JavascriptInterface
         fun checkOffline(lang: String) { main.post { speech.checkOffline(lang) } }
@@ -102,7 +126,7 @@ class MainActivity : Activity() {
 
     private fun startWithPermission(lang: String, names: List<String>) {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-            speech.start(lang, names)
+            begin(lang, names)
         } else {
             pending = lang to names
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1)
@@ -114,10 +138,20 @@ class MainActivity : Activity() {
         val p = pending
         pending = null
         if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED && p != null) {
-            speech.start(p.first, p.second)
+            begin(p.first, p.second)
         } else {
             send(JSONObject().put("type", "error").put("code", "mic-denied").put("fatal", true))
             send(JSONObject().put("type", "state").put("listening", false))
+        }
+    }
+
+    /** Kannada with the downloaded model → fully offline; anything else → the phone's recognizer (Google). */
+    private fun begin(lang: String, names: List<String>) {
+        if (lang == "kn-IN" && useLocal && store.isReady()) {
+            local.start()
+        } else {
+            local.stop()
+            speech.start(lang, names)
         }
     }
 
@@ -138,6 +172,7 @@ class MainActivity : Activity() {
         super.onPause()
         resumeListening = lastStart != null && pending == null
         speech.stop()
+        local.stop()
     }
 
     override fun onResume() {
@@ -151,6 +186,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         speech.destroy()
+        local.destroy()
         tts?.shutdown()
         web.destroy()
         super.onDestroy()

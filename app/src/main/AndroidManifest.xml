@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- The only permission: the microphone, to hear the order. No INTERNET permission, so the app cannot go online. -->
+    <!-- The microphone, to hear the order. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Only for the one-time download of the offline Kannada speech model. Billing itself never goes online. -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- So the app can find the phone's speech recognizer and voice (Android 11+ package visibility) -->
     <queries>

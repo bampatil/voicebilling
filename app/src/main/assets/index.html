@@ -65,6 +65,14 @@ td.num,th.num{text-align:right}
 .cat td{border-bottom:1px solid var(--line);padding:6px 4px}
 .cat .c-name{min-width:7rem}.cat .c-alias{min-width:10rem}.cat .c-price{width:5.5rem}
 .hint{font-size:13px;color:var(--muted);margin:8px 0 0}
+.offline{margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
+.offhead{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline}
+.bar{height:6px;border-radius:4px;background:var(--line);overflow:hidden;margin-top:8px;flex:1}
+.bar i{display:block;height:100%;width:0;background:var(--ink);transition:width .15s}
+.field2{margin-top:10px;font-size:14px}
+.field2 input{width:100%;accent-color:var(--ink)}
+.level{display:flex;gap:10px;align-items:center;font-size:12px;color:var(--muted);margin-top:8px}
+.level .bar{margin-top:0}
 button.primary{background:var(--ink);color:#fff;border-color:var(--ink);font-weight:600}
 .sugg{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;align-items:center;font-size:13px;color:var(--muted)}
 .sugg button{padding:6px 12px;border-radius:999px;font-size:14px;border-color:var(--ink);color:var(--ink)}
@@ -98,6 +106,26 @@ button.primary{background:var(--ink);color:#fff;border-color:var(--ink);font-wei
         </div>
         <div class="status" id="status">Tap Speak, then say items like "ಒಂದು ಕೆಜಿ ಸಕ್ಕರೆ, ಎರಡು ಪಾರ್ಲೆ ಜಿ".</div>
         <button class="small" id="offlineBtn" hidden></button>
+      </div>
+    </div>
+    <div class="offline" id="offlineBox" hidden>
+      <div class="offhead"><b id="offTitle">Offline Kannada</b><span class="status" id="offState"></span></div>
+      <div class="bar" id="offBarWrap" hidden><i id="offBar"></i></div>
+      <div class="actions" style="margin-top:8px">
+        <button class="small primary" id="offGet" hidden>Download offline Kannada (~190 MB, use Wi-Fi)</button>
+        <button class="small" id="offDel" hidden>Delete model</button>
+      </div>
+      <div id="offCtl" hidden>
+        <label class="check"><input type="checkbox" id="useLocal"> Use offline Kannada (no internet)</label>
+        <div class="field2">
+          <label for="gain">Mic boost: <b id="gainVal"></b></label>
+          <input type="range" id="gain" min="1" max="4" step="0.5">
+        </div>
+        <div class="field2">
+          <label for="sens">Pick up softer voices: <b id="sensVal"></b></label>
+          <input type="range" id="sens" min="1" max="5" step="1">
+        </div>
+        <div class="level"><span>Mic level</span><div class="bar"><i id="lvl"></i></div></div>
       </div>
     </div>
     <div class="heard" id="heard" aria-live="polite"><span class="interim">What you say appears here.</span></div>
@@ -762,7 +790,37 @@ const ENGINE_LABEL = NATIVE ? {
   online: () => "Needs internet", unavailable: () => "No offline pack for this language; needs internet",
   unsupported: () => "Uses online recognition (needs internet)", unknown: () => "Chrome speech recognition (may need internet)"
 };
+/* ---------- offline Kannada model (inside the Android app) ---------- */
+const HAS_LOCAL = NATIVE && typeof AndroidSpeech.modelStatus === "function";
+let modelState = "missing";
+let USE_LOCAL = load("voicebilling-uselocal", true);
+let GAIN = load("voicebilling-gain", 1.5), SENS = load("voicebilling-sens", 3);
+const sensToThreshold = v => [0.7, 0.6, 0.5, 0.4, 0.3][v - 1] || 0.5;
+const localActive = () => HAS_LOCAL && LANG === "kn-IN" && USE_LOCAL && modelState === "ready";
+function pushMic() { if (HAS_LOCAL) AndroidSpeech.setMic(GAIN, sensToThreshold(SENS)); }
+function renderOffline(ev) {
+  const box = $("offlineBox");
+  box.hidden = !HAS_LOCAL || LANG !== "kn-IN";
+  if (box.hidden) return;
+  if (ev && ev.state) modelState = ev.state;
+  const st = $("offState"), get = $("offGet"), del = $("offDel"), barW = $("offBarWrap");
+  get.hidden = !(modelState === "missing" || modelState === "error");
+  del.hidden = modelState !== "ready";
+  $("offCtl").hidden = modelState !== "ready";
+  barW.hidden = modelState !== "downloading";
+  if (modelState === "missing") st.textContent = "not downloaded";
+  if (modelState === "ready") st.textContent = `ready · ${ev && ev.mb ? ev.mb + " MB · " : ""}works without internet`;
+  if (modelState === "downloading") {
+    const pct = ev && typeof ev.pct === "number" ? ev.pct : null;
+    st.textContent = pct === null ? "starting download…" : `downloading ${ev.file === "tokens.txt" ? "word list" : "model"} · ${pct}%${ev.mb ? " · " + ev.mb + " MB" : ""}`;
+    $("offBar").style.width = (pct || 0) + "%";
+  }
+  if (modelState === "error") { st.textContent = (ev && ev.message) || "Download failed. Tap to try again."; get.textContent = "Continue download"; }
+  showEngine();
+}
+
 function showEngine() {
+  if (localActive()) { $("engine").textContent = "Kannada: offline on this phone"; $("offlineBtn").hidden = true; return; }
   $("engine").textContent = (ENGINE_LABEL[offlineState] || ENGINE_LABEL.unknown)();
   const btn = $("offlineBtn");
   btn.hidden = (!SR && !NATIVE) || ["available", "unavailable", "unsupported", "online", "downloading"].includes(offlineState);
@@ -804,9 +862,17 @@ const NATIVE_ERRORS = {
   "needs-offline-pack": "This language isn't downloaded for offline use. Tap the button above to download it.",
   "needs-internet": "No internet right now. Kannada needs Google online on this phone; it will continue when the connection is back.",
   "language-not-supported": "The phone's recognizer doesn't support this language. Try another.",
-  "no-recognizer": "No speech recognizer on this phone. Install or update the Google app from the Play Store."
+  "no-recognizer": "No speech recognizer on this phone. Install or update the Google app from the Play Store.",
+  "model-failed": "The offline Kannada model couldn't start. Switched to Google online; try deleting and downloading the model again.",
+  "vad-failed": "Offline listening couldn't start. Switched to Google online.",
+  "mic-error": "The microphone had a problem.",
+  "decode-error": "One phrase couldn't be read."
 };
 window.onNativeSpeech = ev => {
+  if (ev.type === "model") { renderOffline(ev); return; }
+  if (ev.type === "loading") { $("status").textContent = "Loading the Kannada model…"; return; }
+  if (ev.type === "hearing") { if (listening) $("status").textContent = ev.on ? "Hearing…" : "Listening offline… say item and quantity."; return; }
+  if (ev.type === "level") { $("lvl").style.width = Math.max(0, Math.min(100, (ev.db + 60) / 50 * 100)) + "%"; return; }
   if (ev.type === "partial") showInterim(ev.texts[0] || "");
   else if (ev.type === "final") handleFinal(ev.texts || []);
   else if (ev.type === "ready") { if (listening) $("status").textContent = `Listening ${ev.offline ? "offline" : "via Google online"}… say item and quantity.`; }
@@ -817,6 +883,7 @@ window.onNativeSpeech = ev => {
   else if (ev.type === "error") {
     $("status").textContent = (NATIVE_ERRORS[ev.code] || `Speech problem (${ev.code}).`) + (ev.fatal ? "" : " Still listening…");
     if (ev.fatal) { listening = false; micUi(false); }
+    if (ev.code === "model-failed" || ev.code === "vad-failed") { USE_LOCAL = false; $("useLocal").checked = false; AndroidSpeech.setEngine(false); save("voicebilling-uselocal", false); renderOffline(); if (ev.detail) logHeard("(offline model)", ev.detail); }
   }
   else if (ev.type === "offline") { if (ev.lang === LANG) { offlineState = ev.state; save(OFF_KEY(), offlineState); showEngine(); } }
   else if (ev.type === "ttsdone") { if (resumeAfterVoice) { resumeAfterVoice = false; startListening(); } }
@@ -870,7 +937,7 @@ function setLang(l) {
   document.querySelectorAll(".chip").forEach(c => c.setAttribute("aria-pressed", String(c.dataset.lang === l)));
   offlineState = load(OFF_KEY(), "unknown");
   if (listening) { stopListening(); startListening(); }
-  if (NATIVE) { showEngine(); AndroidSpeech.checkOffline(l); return; }
+  if (NATIVE) { renderOffline(); showEngine(); AndroidSpeech.checkOffline(l); return; }
   if (!SR) { $("engine").textContent = "Speech recognition not available in this browser. Use Chrome."; $("mic").disabled = true; return; }
   showEngine();
 }
@@ -897,6 +964,24 @@ $("resetCat").onclick = () => {
   CAT = EXAMPLE.map(x => ({ ...x })); saveCat(); renderCat(); toast("Example list restored");
 };
 
+if (HAS_LOCAL) {
+  $("useLocal").checked = USE_LOCAL; AndroidSpeech.setEngine(USE_LOCAL);
+  $("useLocal").onchange = () => { USE_LOCAL = $("useLocal").checked; save("voicebilling-uselocal", USE_LOCAL); AndroidSpeech.setEngine(USE_LOCAL); if (listening) { stopListening(); startListening(); } showEngine(); };
+  const g = $("gain"), sv = $("sens");
+  g.value = GAIN; sv.value = SENS;
+  const showMic = () => { $("gainVal").textContent = GAIN === 1 ? "off" : `${GAIN}×`; $("sensVal").textContent = ["low", "medium-low", "medium", "high", "very high"][SENS - 1]; };
+  g.oninput = () => { GAIN = +g.value; save("voicebilling-gain", GAIN); showMic(); pushMic(); };
+  sv.oninput = () => { SENS = +sv.value; save("voicebilling-sens", SENS); showMic(); pushMic(); };
+  sv.onchange = () => { if (listening && localActive()) { stopListening(); startListening(); } };   // detector picks it up on restart
+  showMic(); pushMic();
+  $("offGet").onclick = () => { AndroidSpeech.downloadModel(); modelState = "downloading"; renderOffline({ state: "downloading" }); };
+  let delArmed = false;
+  $("offDel").onclick = () => {
+    if (!delArmed) { delArmed = true; $("offDel").textContent = "Tap again to delete"; setTimeout(() => { delArmed = false; $("offDel").textContent = "Delete model"; }, 3000); return; }
+    AndroidSpeech.deleteModel();
+  };
+  AndroidSpeech.modelStatus();
+}
 prep(); renderCat(); renderBill(); renderLog(); setLang(LANG);
 })();
 </script>

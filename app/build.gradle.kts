@@ -11,8 +11,10 @@ android {
         applicationId = "com.voicebilling.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 3
-        versionName = "0.3"
+        // Phones from the last ~8 years (Pixel, Samsung S/A/M series) are 64-bit ARM; keeps the app small.
+        ndk { abiFilters += listOf("arm64-v8a") }
+        versionCode = 4
+        versionName = "0.4"
     }
 
     // Fixed signing key so every new build installs over the previous one.
@@ -45,6 +47,8 @@ android {
     }
 }
 
-// No extra libraries: Android's own speech recognizer, text-to-speech and WebView only.
+// One library: sherpa-onnx (Apache-2.0) runs the offline speech model on the phone.
+// The workflow downloads the official file from github.com/k2-fsa/sherpa-onnx releases into app/libs.
 dependencies {
+    implementation(files("libs/sherpa-onnx.aar"))
 }

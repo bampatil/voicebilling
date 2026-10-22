@@ -23,8 +23,25 @@ jobs:
         with:
           gradle-version: "8.9"
 
+      # Offline speech engine (sherpa-onnx, Apache-2.0) and its voice detector, from the official releases
+      - name: Get speech library
+        run: |
+          mkdir -p app/libs app/src/main/assets
+          curl -fsSL -o app/libs/sherpa-onnx.aar https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.12.23/sherpa-onnx-1.12.23.aar
+          curl -fsSL -o app/src/main/assets/silero_vad.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
+          sha256sum app/libs/sherpa-onnx.aar app/src/main/assets/silero_vad.onnx
+          ls -la app/libs app/src/main/assets
+
       - name: Build
-        run: gradle assembleRelease
+        run: |
+          set -o pipefail
+          gradle assembleRelease 2>&1 | tee build.log
+
+      # Show compile errors as annotations so they can be read without signing in
+      - name: Report errors
+        if: failure()
+        run: |
+          grep -E "^e: |error:|What went wrong|> " build.log | head -40 | while IFS= read -r l; do echo "::error::${l//%/%25}"; done
 
       - name: Rename APK
         run: cp app/build/outputs/apk/release/app-release.apk VoiceBilling.apk
@@ -44,5 +61,5 @@ jobs:
           gh release delete latest --yes --cleanup-tag || true
           gh release create latest VoiceBilling.apk \
             --title "Voice Billing $VERSION" \
-            --notes "Built from ${GITHUB_SHA::7}. Offline voice billing: say items in Kannada, English or Hindi." \
+            --notes "Built from ${GITHUB_SHA::7}. Voice billing in Kannada, English and Hindi. Kannada can run fully offline after a one-time model download." \
             --target "$GITHUB_SHA" --latest
