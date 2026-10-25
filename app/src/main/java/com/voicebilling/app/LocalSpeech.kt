@@ -35,6 +35,7 @@ class LocalSpeech(private val act: Activity, private val store: ModelStore, priv
     @Volatile var gain = 1.5f
     @Volatile var sensitivity = 0.5f      // voice detector threshold: lower = picks up softer speech
     private var recordThread: Thread? = null
+    private var decodedOnce = false
 
     /** Loads the model (a second or two the first time) and starts listening. */
     fun start() {
@@ -57,7 +58,9 @@ class LocalSpeech(private val act: Activity, private val store: ModelStore, priv
                         ),
                         decodingMethod = "greedy_search"
                     )
+                    CrashGuard.mark(act, "model")      // if the engine kills the app here, next start knows
                     recognizer = OfflineRecognizer(config = config)
+                    CrashGuard.clear(act)
                 }
                 if (running) act.runOnUiThread { startRecording() }
             } catch (e: Throwable) {
@@ -71,6 +74,7 @@ class LocalSpeech(private val act: Activity, private val store: ModelStore, priv
 
     @SuppressLint("MissingPermission")
     private fun startRecording() {
+        CrashGuard.mark(act, "vad")
         val vad = try {
             Vad(act.assets, VadModelConfig(
                 sileroVadModelConfig = SileroVadModelConfig(
@@ -92,6 +96,7 @@ class LocalSpeech(private val act: Activity, private val store: ModelStore, priv
             emit(JSONObject().put("type", "state").put("listening", false))
             return
         }
+        CrashGuard.clear(act)
         val minBuf = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val rec = try {
             AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, rate, AudioFormat.CHANNEL_IN_MONO,
@@ -156,9 +161,11 @@ class LocalSpeech(private val act: Activity, private val store: ModelStore, priv
     private fun decode(seg: FloatArray) {
         val r = recognizer ?: return
         try {
+            if (!decodedOnce) CrashGuard.mark(act, "decode")
             val stream = r.createStream()
             stream.acceptWaveform(seg, rate)
             r.decode(stream)
+            if (!decodedOnce) { decodedOnce = true; CrashGuard.clear(act) }
             val text = r.getResult(stream).text.trim()
             stream.release()
             if (text.isNotEmpty()) emit(JSONObject().put("type", "final").put("texts", JSONArray(listOf(text))))

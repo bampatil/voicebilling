@@ -13,8 +13,8 @@ android {
         targetSdk = 34
         // Phones from the last ~8 years (Pixel, Samsung S/A/M series) are 64-bit ARM; keeps the app small.
         ndk { abiFilters += listOf("arm64-v8a") }
-        versionCode = 4
-        versionName = "0.4"
+        versionCode = 5
+        versionName = "0.4.1"
     }
 
     // Fixed signing key so every new build installs over the previous one.

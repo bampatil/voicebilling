@@ -73,6 +73,10 @@ td.num,th.num{text-align:right}
 .field2 input{width:100%;accent-color:var(--ink)}
 .level{display:flex;gap:10px;align-items:center;font-size:12px;color:var(--muted);margin-top:8px}
 .level .bar{margin-top:0}
+.crash{border-color:var(--warn)}
+.crash h2{color:var(--warn)}
+.crash p{margin:0 0 8px;font-size:14px}
+.crash pre{font:11px/1.4 var(--mono);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0}
 button.primary{background:var(--ink);color:#fff;border-color:var(--ink);font-weight:600}
 .sugg{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;align-items:center;font-size:13px;color:var(--muted)}
 .sugg button{padding:6px 12px;border-radius:999px;font-size:14px;border-color:var(--ink);color:var(--ink)}
@@ -94,6 +98,16 @@ button.primary{background:var(--ink);color:#fff;border-color:var(--ink);font-wei
     <h1>Voice Billing<small>say the items, get the bill</small></h1>
     <span class="status" id="engine">Chrome speech recognition</span>
   </header>
+
+  <section class="crash" id="crashBox" hidden aria-label="Crash report">
+    <h2>The app closed last time</h2>
+    <p id="crashMsg"></p>
+    <pre id="crashText"></pre>
+    <div class="actions">
+      <button class="primary" id="crashCopy">Copy report</button>
+      <button id="crashHide">Dismiss</button>
+    </div>
+  </section>
 
   <section aria-label="Listen">
     <div class="microw">
@@ -868,7 +882,24 @@ const NATIVE_ERRORS = {
   "mic-error": "The microphone had a problem.",
   "decode-error": "One phrase couldn't be read."
 };
+const CRASH_PHASE = {
+  model: "It closed while loading the offline Kannada model. Offline Kannada is switched off, so billing uses Google online for now.",
+  vad: "It closed while starting the offline voice detector. Offline Kannada is switched off, so billing uses Google online for now.",
+  decode: "It closed while the offline model was reading your first phrase. Offline Kannada is switched off, so billing uses Google online for now."
+};
+function showCrash(ev) {
+  $("crashBox").hidden = false;
+  $("crashMsg").textContent = (CRASH_PHASE[ev.phase] || "It closed because of an error.") + " Tap Copy report and send it to fix the cause.";
+  const when = ev.at ? new Date(ev.at).toLocaleString() : "";
+  $("crashText").textContent = [`Voice Billing ${ev.version} · ${ev.device} · ${when}`, `Step: ${ev.phase || "-"}`,
+    ev.stack ? "Error:\n" + ev.stack : "", ev.log ? "Log:\n" + ev.log : "Log: (empty)"].filter(Boolean).join("\n\n");
+  if (CRASH_PHASE[ev.phase] && HAS_LOCAL) {
+    USE_LOCAL = false; save("voicebilling-uselocal", false); AndroidSpeech.setEngine(false);
+    $("useLocal").checked = false; renderOffline();
+  }
+}
 window.onNativeSpeech = ev => {
+  if (ev.type === "crash") { showCrash(ev); return; }
   if (ev.type === "model") { renderOffline(ev); return; }
   if (ev.type === "loading") { $("status").textContent = "Loading the Kannada model…"; return; }
   if (ev.type === "hearing") { if (listening) $("status").textContent = ev.on ? "Hearing…" : "Listening offline… say item and quantity."; return; }
@@ -964,6 +995,8 @@ $("resetCat").onclick = () => {
   CAT = EXAMPLE.map(x => ({ ...x })); saveCat(); renderCat(); toast("Example list restored");
 };
 
+$("crashHide").onclick = () => { $("crashBox").hidden = true; };
+$("crashCopy").onclick = () => { const t = $("crashText").textContent; if (NATIVE) AndroidSpeech.copy(t); else navigator.clipboard?.writeText(t).catch(() => {}); toast("Report copied"); };
 if (HAS_LOCAL) {
   $("useLocal").checked = USE_LOCAL; AndroidSpeech.setEngine(USE_LOCAL);
   $("useLocal").onchange = () => { USE_LOCAL = $("useLocal").checked; save("voicebilling-uselocal", USE_LOCAL); AndroidSpeech.setEngine(USE_LOCAL); if (listening) { stopListening(); startListening(); } showEngine(); };

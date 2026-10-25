@@ -33,6 +33,7 @@ class MainActivity : Activity() {
     private lateinit var store: ModelStore
     private lateinit var local: LocalSpeech
     private var useLocal = true   // offline Kannada model when downloaded; the page can switch to Google
+    private var crashReport: JSONObject? = null
     private var tts: TextToSpeech? = null
     private var pending: Pair<String, List<String>>? = null
     private var lastStart: Pair<String, List<String>>? = null
@@ -41,6 +42,11 @@ class MainActivity : Activity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashGuard.install(this)
+        crashReport = CrashGuard.collect(this)
+        // If the offline engine closed the app last time, don't use it again until the shopkeeper turns it back on.
+        val phase = crashReport?.optString("phase") ?: ""
+        if (phase == "model" || phase == "vad" || phase == "decode") useLocal = false
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         web = WebView(this)
@@ -52,6 +58,10 @@ class MainActivity : Activity() {
         // Stay on our own page.
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = true
+            override fun onPageFinished(view: WebView, url: String) {
+                crashReport?.let { send(it) }
+                crashReport = null
+            }
         }
 
         speech = Speech(this) { send(it) }
