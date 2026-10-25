@@ -1,0 +1,53 @@
+name: Prepare Kannada model
+
+# Runs when the preparation script changes, or by hand from the Actions tab.
+on:
+  push:
+    branches: [main]
+    paths: ["tools/prepare_model.py", ".github/workflows/prepare-model.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  SOURCE: https://huggingface.co/parismitaglobalsolutions/indicconformer-sherpa-onnx/resolve/main
+  TAG: model-kn-1
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      # onnxruntime 1.17.1 = the same reader as inside the app's speech engine
+      - name: Install tools
+        run: pip install "numpy<2" "onnx==1.17.0" "onnxruntime==1.17.1"
+
+      - name: Download original model
+        run: |
+          mkdir -p in out
+          curl -fL --retry 3 -o in/model.int8.onnx "$SOURCE/kn/model.int8.onnx"
+          curl -fL --retry 3 -o in/tokens.txt "$SOURCE/tokens.txt"
+          ls -la in
+          echo "::notice::Original model $(du -m in/model.int8.onnx | cut -f1) MB, sha256 $(sha256sum in/model.int8.onnx | cut -c1-16)"
+
+      - name: Fix labels and test with ONNX Runtime 1.17.1
+        run: python tools/prepare_model.py in/model.int8.onnx out/model.int8.onnx
+
+      - name: Publish in this repo's releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp in/tokens.txt out/tokens.txt
+          cd out && sha256sum model.int8.onnx tokens.txt > SHA256SUMS && cat SHA256SUMS && cd ..
+          echo "::notice::Fixed model $(du -m out/model.int8.onnx | cut -f1) MB, tokens $(wc -l < out/tokens.txt) lines"
+          gh release delete "$TAG" --yes --cleanup-tag || true
+          gh release create "$TAG" out/model.int8.onnx out/tokens.txt out/SHA256SUMS \
+            --title "Kannada speech model (prepared)" \
+            --notes "AI4Bharat IndicConformer Kannada (MIT), from huggingface.co/parismitaglobalsolutions/indicconformer-sherpa-onnx. Format labels lowered for ONNX Runtime 1.17 and test-run before publishing. Downloaded once by the Voice Billing app." \
+            --target "$GITHUB_SHA" --latest=false
