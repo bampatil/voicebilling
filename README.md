@@ -11,6 +11,6 @@ Say the items, get the bill. Kannada, English and Hindi. Kannada can run fully o
 Builds on every push to `main`; the APK is at Releases › latest › VoiceBilling.apk.
 
 ## Credits and licences
-- Speech model: AI4Bharat IndicConformer (MIT), ONNX export by parismitaglobalsolutions/indicconformer-sherpa-onnx on Hugging Face.
+- Speech model: AI4Bharat IndicConformer (MIT), ONNX export by parismitaglobalsolutions/indicconformer-sherpa-onnx on Hugging Face. `tools/prepare_model.py` (workflow "Prepare Kannada model") removes an unused format label so ONNX Runtime 1.17 in the app can open it, test-runs it, and publishes it as release `model-kn-1`, which the app downloads.
 - Speech engine: sherpa-onnx by k2-fsa (Apache-2.0), downloaded from its official releases at build time.
 - Voice detector: Silero VAD (MIT), from the sherpa-onnx releases.

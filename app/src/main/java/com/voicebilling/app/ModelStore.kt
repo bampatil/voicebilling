@@ -12,14 +12,19 @@ import kotlin.concurrent.thread
  * The offline Kannada speech model: AI4Bharat IndicConformer (MIT licence), exported for sherpa-onnx.
  * Downloaded once (~190 MB) into the app's private storage; after that no internet is needed.
  * Downloads resume where they stopped if the connection drops.
+ *
+ * The file comes from this app's own GitHub release "model-kn-1": the original model, with a format
+ * label fixed so the phone's speech engine can open it, and test-run before publishing
+ * (see tools/prepare_model.py). A model from an older app version is removed automatically.
  */
 class ModelStore(private val ctx: Context, private val emit: (JSONObject) -> Unit) {
 
     companion object {
-        private const val BASE = "https://huggingface.co/parismitaglobalsolutions/indicconformer-sherpa-onnx/resolve/main"
+        const val MODEL_VERSION = "model-kn-1"
+        private const val BASE = "https://github.com/bampatil/voicebilling/releases/download/$MODEL_VERSION"
         val FILES = listOf(
             "tokens.txt" to "$BASE/tokens.txt",
-            "model.int8.onnx" to "$BASE/kn/model.int8.onnx"
+            "model.int8.onnx" to "$BASE/model.int8.onnx"
         )
         private const val MIN_MODEL_BYTES = 30L * 1024 * 1024   // anything smaller is a broken download
     }
@@ -30,14 +35,25 @@ class ModelStore(private val ctx: Context, private val emit: (JSONObject) -> Uni
 
     @Volatile private var downloading = false
 
+    private val versionFile: File get() = File(dir, "version.txt")
+
     fun isReady(): Boolean {
         val m = File(dir, "model.int8.onnx"); val t = File(dir, "tokens.txt")
-        return m.exists() && m.length() >= MIN_MODEL_BYTES && t.exists() && t.length() > 0
+        return m.exists() && m.length() >= MIN_MODEL_BYTES && t.exists() && t.length() > 0 &&
+            versionFile.exists() && versionFile.readText().trim() == MODEL_VERSION
+    }
+
+    /** A complete model from an older version (e.g. the one 0.4 couldn't open) is deleted so it gets re-downloaded. */
+    private fun dropOutdated() {
+        val m = File(dir, "model.int8.onnx")
+        val current = versionFile.exists() && versionFile.readText().trim() == MODEL_VERSION
+        if (m.exists() && !current) dir.deleteRecursively()
     }
 
     fun sizeMb(): Long = dir.listFiles()?.sumOf { it.length() }?.div(1024 * 1024) ?: 0
 
     fun status() {
+        if (!downloading) dropOutdated()
         val state = when {
             downloading -> "downloading"
             isReady() -> "ready"
@@ -52,8 +68,10 @@ class ModelStore(private val ctx: Context, private val emit: (JSONObject) -> Uni
         status()
         thread(name = "model-download") {
             try {
+                dropOutdated()
                 dir.mkdirs()
                 for ((name, url) in FILES) fetch(name, url)
+                versionFile.writeText(MODEL_VERSION)
                 downloading = false
                 if (isReady()) emit(JSONObject().put("type", "model").put("state", "ready").put("mb", sizeMb()))
                 else emit(JSONObject().put("type", "model").put("state", "error").put("message", "Download incomplete. Tap to try again."))
@@ -110,7 +128,7 @@ class ModelStore(private val ctx: Context, private val emit: (JSONObject) -> Uni
             c.instanceFollowRedirects = false
             c.connectTimeout = 20000
             c.readTimeout = 30000
-            c.setRequestProperty("User-Agent", "VoiceBilling/0.4")
+            c.setRequestProperty("User-Agent", "VoiceBilling/${BuildInfo.VERSION}")
             if (from > 0) c.setRequestProperty("Range", "bytes=$from-")
             val code = c.responseCode
             if (code in 300..399) {

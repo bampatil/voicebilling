@@ -62,5 +62,5 @@ object CrashGuard {
 }
 
 object BuildInfo {
-    const val VERSION = "0.4.1"
+    const val VERSION = "0.4.2"
 }
