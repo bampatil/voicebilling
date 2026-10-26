@@ -89,6 +89,8 @@ button.primary{background:var(--ink);color:#fff;border-color:var(--ink);font-wei
 .heardlog li{border-top:1px dashed var(--line);padding:6px 0}
 .heardlog time{color:var(--muted);font-family:var(--mono);margin-right:6px}
 .heardlog .res{display:block;color:var(--muted)}
+.heardlog .loud{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px;margin-top:3px}
+.heardlog .loud b{display:block;height:6px;border-radius:3px;background:var(--ink);min-width:2px;max-width:90px;flex:none}
 .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:8px 14px;border-radius:999px;font-size:14px}
 </style>
 </head>
@@ -712,8 +714,11 @@ function showHeard(text, result, warn) {
   const r = document.createElement("div"); r.className = warn ? "miss" : "status"; r.textContent = result;
   h.append(t, r);
 }
+// Loudness of the phrase being handled (0-100), sent by the app with each phrase. Lets us see
+// how much louder the shopkeeper is than the people around him, to set a "closeness" filter later.
+let LOUD = null;
 function logHeard(text, result) {
-  LOG.unshift({ t: Date.now(), text, result }); LOG = LOG.slice(0, 30); save("voicebilling-heard", LOG); renderLog();
+  LOG.unshift({ t: Date.now(), text, result, loud: LOUD ? LOUD.v : null, eng: LOUD ? LOUD.e : "" }); LOG = LOG.slice(0, 30); save("voicebilling-heard", LOG); renderLog();
 }
 function renderLog() {
   const ul = $("heardLog"); ul.textContent = "";
@@ -722,7 +727,14 @@ function renderLog() {
     const li = document.createElement("li"); const tm = document.createElement("time"); const res = document.createElement("span");
     tm.textContent = new Date(e.t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
     res.className = "res"; res.textContent = e.result;
-    li.append(tm, document.createTextNode(`“${e.text}”`), res); ul.append(li);
+    li.append(tm, document.createTextNode(`“${e.text}”`), res);
+    if (typeof e.loud === "number") {
+      const ld = document.createElement("span"); ld.className = "loud";
+      const bar = document.createElement("b"); bar.style.width = Math.max(2, Math.round(e.loud * 0.9)) + "px";
+      ld.append(bar, document.createTextNode(`loudness ${e.loud}` + (e.eng === "google" ? " · Google scale" : "")));
+      li.append(ld);
+    }
+    ul.append(li);
   });
 }
 
@@ -905,7 +917,7 @@ window.onNativeSpeech = ev => {
   if (ev.type === "hearing") { if (listening) $("status").textContent = ev.on ? "Hearing…" : "Listening offline… say item and quantity."; return; }
   if (ev.type === "level") { $("lvl").style.width = Math.max(0, Math.min(100, (ev.db + 60) / 50 * 100)) + "%"; return; }
   if (ev.type === "partial") showInterim(ev.texts[0] || "");
-  else if (ev.type === "final") handleFinal(ev.texts || []);
+  else if (ev.type === "final") { LOUD = (typeof ev.loud === "number" && ev.loud >= 0) ? { v: ev.loud, e: ev.engine || "" } : null; handleFinal(ev.texts || []); LOUD = null; }
   else if (ev.type === "ready") { if (listening) $("status").textContent = `Listening ${ev.offline ? "offline" : "via Google online"}… say item and quantity.`; }
   else if (ev.type === "state") {
     if (!ev.listening && listening) { listening = false; micUi(false); }

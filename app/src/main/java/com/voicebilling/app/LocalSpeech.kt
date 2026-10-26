@@ -168,10 +168,33 @@ class LocalSpeech(private val act: Activity, private val store: ModelStore, priv
             if (!decodedOnce) { decodedOnce = true; CrashGuard.clear(act) }
             val text = r.getResult(stream).text.trim()
             stream.release()
-            if (text.isNotEmpty()) emit(JSONObject().put("type", "final").put("texts", JSONArray(listOf(text))))
+            if (text.isNotEmpty()) emit(JSONObject().put("type", "final").put("texts", JSONArray(listOf(text)))
+                .put("loud", loudness(seg)).put("engine", "offline"))
         } catch (e: Throwable) {
             emit(JSONObject().put("type", "error").put("code", "decode-error").put("fatal", false).put("detail", e.message ?: ""))
         }
+    }
+
+    /**
+     * How loud the speaker was in this phrase, 0 to 100, measured on the voice only:
+     * the phrase is cut into 32 ms slices and the loudest third are averaged, so pauses between words
+     * don't pull the number down. Mic boost is taken back out, so the number doesn't change with the boost setting.
+     * Same scale as the Mic level bar: 0 = -60 dB (silence), 100 = -10 dB (shouting into the mic).
+     */
+    private fun loudness(seg: FloatArray): Int {
+        val frame = 512
+        val levels = ArrayList<Double>()
+        var i = 0
+        while (i + frame <= seg.size) {
+            var sum = 0.0
+            for (j in i until i + frame) sum += (seg[j] * seg[j]).toDouble()
+            levels.add(20 * log10(sqrt(sum / frame) + 1e-9))
+            i += frame
+        }
+        if (levels.isEmpty()) return 0
+        levels.sortDescending()
+        val top = levels.take(max(1, levels.size / 3)).average() - 20 * log10(max(gain, 0.1f).toDouble())
+        return ((top + 60) / 50 * 100).toInt().coerceIn(0, 100)
     }
 
     fun stop() {

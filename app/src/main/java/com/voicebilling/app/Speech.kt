@@ -136,12 +136,16 @@ class Speech(private val act: Activity, private val emit: (JSONObject) -> Unit) 
         return JSONArray(list)
     }
 
+    @Volatile private var peakRms = -100f
+
     private val listener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {
+            peakRms = -100f
             emit(JSONObject().put("type", "ready").put("offline", activeOffline))
         }
         override fun onBeginningOfSpeech() {}
-        override fun onRmsChanged(rmsdB: Float) {}
+        // Google reports loudness on its own scale (about -2 quiet to 10 loud). We keep the loudest moment of each phrase.
+        override fun onRmsChanged(rmsdB: Float) { if (rmsdB > peakRms) peakRms = rmsdB }
         override fun onBufferReceived(buffer: ByteArray?) {}
         override fun onEndOfSpeech() {}
         override fun onEvent(eventType: Int, params: Bundle?) {}
@@ -154,7 +158,9 @@ class Speech(private val act: Activity, private val emit: (JSONObject) -> Unit) 
         override fun onResults(results: Bundle?) {
             errorsInARow = 0
             val t = texts(results)
-            if (t.length() > 0) emit(JSONObject().put("type", "final").put("texts", t))
+            if (t.length() > 0) emit(JSONObject().put("type", "final").put("texts", t)
+                .put("loud", if (peakRms < -50f) -1 else ((peakRms + 2f) / 12f * 100f).toInt().coerceIn(0, 100))
+                .put("engine", "google"))
             restartSoon(50)
         }
 
