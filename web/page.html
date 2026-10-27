@@ -76,6 +76,7 @@ td.num,th.num{text-align:right}
 .crash{border-color:var(--warn)}
 .crash h2{color:var(--warn)}
 .crash p{margin:0 0 8px;font-size:14px}
+.engcheck{font:12px/1.45 var(--mono);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;white-space:pre-wrap;word-break:break-word;margin:8px 0 0}
 .crash pre{font:11px/1.4 var(--mono);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0}
 button.primary{background:var(--ink);color:#fff;border-color:var(--ink);font-weight:600}
 .sugg{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;align-items:center;font-size:13px;color:var(--muted)}
@@ -142,6 +143,8 @@ button.primary{background:var(--ink);color:#fff;border-color:var(--ink);font-wei
           <input type="range" id="sens" min="1" max="5" step="1">
         </div>
         <div class="level"><span>Mic level</span><div class="bar"><i id="lvl"></i></div></div>
+        <div class="actions" style="margin-top:8px"><button class="small" id="engBtn">Engine check (test)</button></div>
+        <pre class="engcheck" id="engOut" hidden></pre>
       </div>
     </div>
     <div class="heard" id="heard" aria-live="polite"><span class="interim">What you say appears here.</span></div>
@@ -590,7 +593,8 @@ const NATIVE_ERRORS = {
 const CRASH_PHASE = {
   model: "It closed while loading the offline Kannada model. Offline Kannada is switched off, so billing uses Google online for now.",
   vad: "It closed while starting the offline voice detector. Offline Kannada is switched off, so billing uses Google online for now.",
-  decode: "It closed while the offline model was reading your first phrase. Offline Kannada is switched off, so billing uses Google online for now."
+  decode: "It closed while the offline model was reading your first phrase. Offline Kannada is switched off, so billing uses Google online for now.",
+  enginecheck: "It closed during the Engine check: the two speech engines don't work together yet. Billing is not affected."
 };
 function showCrash(ev) {
   $("crashBox").hidden = false;
@@ -605,6 +609,7 @@ function showCrash(ev) {
 }
 window.onNativeSpeech = ev => {
   if (ev.type === "crash") { showCrash(ev); return; }
+  if (ev.type === "enginecheck") { $("engOut").hidden = false; $("engOut").textContent = ev.text; $("engBtn").disabled = !ev.done; return; }
   if (ev.type === "model") { renderOffline(ev); return; }
   if (ev.type === "loading") { $("status").textContent = "Loading the Kannada model…"; return; }
   if (ev.type === "hearing") { if (listening) $("status").textContent = ev.on ? "Hearing…" : "Listening offline… say item and quantity."; return; }
@@ -712,6 +717,7 @@ if (HAS_LOCAL) {
   sv.oninput = () => { SENS = +sv.value; save("voicebilling-sens", SENS); showMic(); pushMic(); };
   sv.onchange = () => { if (listening && localActive()) { stopListening(); startListening(); } };   // detector picks it up on restart
   showMic(); pushMic();
+  $("engBtn").onclick = () => { $("engBtn").disabled = true; $("engOut").hidden = false; $("engOut").textContent = "Starting…"; AndroidSpeech.engineCheck(); };
   $("offGet").onclick = () => { AndroidSpeech.downloadModel(); modelState = "downloading"; renderOffline({ state: "downloading" }); };
   let delArmed = false;
   $("offDel").onclick = () => {

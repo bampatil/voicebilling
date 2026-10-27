@@ -15,8 +15,8 @@ android {
         targetSdk = 34
         // Phones from the last ~8 years (Pixel, Samsung S/A/M series) are 64-bit ARM; keeps the app small.
         ndk { abiFilters += listOf("arm64-v8a") }
-        versionCode = 7
-        versionName = "0.4.3"
+        versionCode = 8
+        versionName = "0.4.4"
     }
 
     // Fixed signing key so every new build installs over the previous one.
@@ -35,6 +35,10 @@ android {
             isDebuggable = false
             signingConfig = signingConfigs.getByName("debug")
         }
+    }
+    // Both libraries above contain libonnxruntime.so (both 1.17.1). Keep one copy.
+    packaging {
+        jniLibs { pickFirsts += "**/libonnxruntime.so" }
     }
     lint {
         checkReleaseBuilds = false
@@ -80,4 +84,7 @@ if (page.exists() && parser.exists()) {
 
 dependencies {
     implementation(files("libs/sherpa-onnx.aar"))
+    // ONNX Runtime's own Android library (MIT), same version as inside sherpa-onnx. Lets the app run the model
+    // directly and read its rough guesses, which keyword listening needs. Test stage: see EngineCheck.kt.
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.17.1")
 }

@@ -108,6 +108,9 @@ class MainActivity : Activity() {
         fun deleteModel() { main.post { local.stop(); store.delete() } }
 
         @JavascriptInterface
+        fun engineCheck() { EngineCheck.run(this@MainActivity, store) { send(it) } }
+
+        @JavascriptInterface
         fun setEngine(offline: Boolean) { main.post { useLocal = offline } }
 
         @JavascriptInterface
