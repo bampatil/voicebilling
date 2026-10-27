@@ -48,7 +48,34 @@ android {
 }
 
 // One library: sherpa-onnx (Apache-2.0) runs the offline speech model on the phone.
-// The workflow downloads the official file from github.com/k2-fsa/sherpa-onnx releases into app/libs.
+// It and the small voice detector (silero_vad.onnx) are too big / not ours to keep in git, so they are
+// downloaded from the official k2-fsa releases the first time the project is opened (Android Studio or CI).
+// Already there = nothing is downloaded.
+val speechFiles = mapOf(
+    "libs/sherpa-onnx.aar" to "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.12.23/sherpa-onnx-1.12.23.aar",
+    "src/main/assets/silero_vad.onnx" to "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
+)
+for ((path, url) in speechFiles) {
+    val f = file(path)
+    if (!f.exists() || f.length() == 0L) {
+        logger.lifecycle("Downloading $url")
+        f.parentFile.mkdirs()
+        val part = file("$path.part")
+        java.net.URI(url).toURL().openStream().use { input -> part.outputStream().use { input.copyTo(it) } }
+        part.renameTo(f)
+    }
+}
+
+// The screen is written in web/page.html (layout + logic) and web/parser.js (understanding what was said).
+// They are joined into the single file the app shows: app/src/main/assets/index.html. Edit the web/ files, not index.html.
+val page = rootProject.file("web/page.html")
+val parser = rootProject.file("web/parser.js")
+if (page.exists() && parser.exists()) {
+    val joined = page.readText().replace("/*PARSER*/", parser.readText())
+    val out = file("src/main/assets/index.html")
+    if (!out.exists() || out.readText() != joined) out.writeText(joined)
+}
+
 dependencies {
     implementation(files("libs/sherpa-onnx.aar"))
 }

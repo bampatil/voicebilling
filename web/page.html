@@ -1,0 +1,727 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Voice Billing</title>
+<style>
+/* Layout: counter-top tool. Mic and live bill first, catalogue below. Ledger paper feel, ink-blue accent. */
+:root{
+  --bg:#f6f4ee; --paper:#fffdf8; --line:#e2ddcf; --fg:#22211d; --muted:#6f6b60;
+  --ink:#1f4fa3; --ink-soft:#e5ecf8; --ok:#2f7d4f; --warn:#b5651d; --rec:#c8372d;
+  --font:"Noto Sans Kannada","Noto Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"Roboto Mono",Menlo,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#15161a; --paper:#1d1f25; --line:#30333c; --fg:#ecebe6; --muted:#9a9890;
+  --ink:#8fb0ff; --ink-soft:#24304a; --ok:#6cc792; --warn:#e7a25c; --rec:#ff6f61; color-scheme:dark}}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font:15px/1.5 var(--font);padding:env(safe-area-inset-top,0) 16px env(safe-area-inset-bottom,0)}
+.wrap{max-width:640px;margin:0 auto;padding-block:16px 48px;display:flex;flex-direction:column;gap:16px}
+header{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+h1{margin:0;font-size:22px}
+h1 small{display:block;font-size:12px;font-weight:400;color:var(--muted)}
+h2{margin:0 0 10px;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+section{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:16px}
+button{font:inherit;border:1px solid var(--line);background:var(--paper);color:var(--fg);border-radius:10px;padding:10px 14px;cursor:pointer}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+button.small{padding:6px 10px;font-size:13px}
+input,select{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px}
+.microw{display:flex;gap:16px;align-items:center}
+.mic{width:84px;height:84px;border-radius:50%;flex:none;background:var(--ink);color:#fff;border:none;font-size:15px;font-weight:700;box-shadow:0 2px 0 rgba(0,0,0,.15)}
+.mic.on{background:var(--rec);animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{50%{box-shadow:0 0 0 10px color-mix(in srgb,var(--rec) 20%,transparent)}}
+@media (prefers-reduced-motion:reduce){.mic.on{animation:none}}
+.micinfo{min-width:0;flex:1;display:flex;flex-direction:column;gap:8px}
+.langs{display:flex;gap:6px;flex-wrap:wrap}
+.chip{padding:5px 12px;border-radius:999px;font-size:13px}
+.chip[aria-pressed="true"]{background:var(--ink);color:#fff;border-color:var(--ink)}
+.status{font-size:13px;color:var(--muted)}
+.status b{color:var(--fg)}
+.heard{margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--ink-soft);min-height:44px;font-size:16px}
+.heard .interim{color:var(--muted)}
+.heard .miss{color:var(--warn)}
+.typerow{display:flex;gap:8px;margin-top:10px}
+.typerow input{flex:1;min-width:0}
+.tablewrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);text-align:left;font-weight:600;padding:6px 6px;border-bottom:1px solid var(--line)}
+td{padding:8px 6px;border-bottom:1px dashed var(--line);vertical-align:top}
+td.num,th.num{text-align:right}
+.bill td.item b{display:block}
+.bill td.item small{color:var(--muted);font-size:12px}
+.bill td.item small.note{color:var(--warn)}
+.bill input.qty{width:4.6rem;text-align:right;padding:5px 6px}
+.qtyunit{color:var(--muted);font-size:12px;margin-left:4px}
+.totalrow{display:flex;justify-content:space-between;align-items:baseline;margin-top:12px;padding-top:12px;border-top:2px solid var(--fg)}
+.totalrow span{font-size:14px;color:var(--muted)}
+.totalrow b{font:700 28px var(--mono)}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.empty{color:var(--muted);font-size:14px;padding:8px 0}
+.cat input{width:100%;min-width:0;padding:6px}
+.cat td{border-bottom:1px solid var(--line);padding:6px 4px}
+.cat .c-name{min-width:7rem}.cat .c-alias{min-width:10rem}.cat .c-price{width:5.5rem}
+.hint{font-size:13px;color:var(--muted);margin:8px 0 0}
+.offline{margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
+.offhead{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline}
+.bar{height:6px;border-radius:4px;background:var(--line);overflow:hidden;margin-top:8px;flex:1}
+.bar i{display:block;height:100%;width:0;background:var(--ink);transition:width .15s}
+.field2{margin-top:10px;font-size:14px}
+.field2 input{width:100%;accent-color:var(--ink)}
+.level{display:flex;gap:10px;align-items:center;font-size:12px;color:var(--muted);margin-top:8px}
+.level .bar{margin-top:0}
+.crash{border-color:var(--warn)}
+.crash h2{color:var(--warn)}
+.crash p{margin:0 0 8px;font-size:14px}
+.crash pre{font:11px/1.4 var(--mono);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0}
+button.primary{background:var(--ink);color:#fff;border-color:var(--ink);font-weight:600}
+.sugg{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;align-items:center;font-size:13px;color:var(--muted)}
+.sugg button{padding:6px 12px;border-radius:999px;font-size:14px;border-color:var(--ink);color:var(--ink)}
+.check{display:flex;gap:8px;align-items:center;font-size:14px;margin-top:12px}
+.check input{width:18px;height:18px;accent-color:var(--ink)}
+.voicehelp{margin-top:10px;font-size:14px}
+.voicehelp summary{cursor:pointer;color:var(--ink);padding:4px 0}
+.voicehelp ul{margin:6px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:4px}
+.heardlog{list-style:none;padding-left:0!important;font-size:13px}
+.heardlog li{border-top:1px dashed var(--line);padding:6px 0}
+.heardlog time{color:var(--muted);font-family:var(--mono);margin-right:6px}
+.heardlog .res{display:block;color:var(--muted)}
+.heardlog .loud{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px;margin-top:3px}
+.heardlog .loud b{display:block;height:6px;border-radius:3px;background:var(--ink);min-width:2px;max-width:90px;flex:none}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:8px 14px;border-radius:999px;font-size:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Voice Billing<small>say the items, get the bill</small></h1>
+    <span class="status" id="engine">Chrome speech recognition</span>
+  </header>
+
+  <section class="crash" id="crashBox" hidden aria-label="Crash report">
+    <h2>The app closed last time</h2>
+    <p id="crashMsg"></p>
+    <pre id="crashText"></pre>
+    <div class="actions">
+      <button class="primary" id="crashCopy">Copy report</button>
+      <button id="crashHide">Dismiss</button>
+    </div>
+  </section>
+
+  <section aria-label="Listen">
+    <div class="microw">
+      <button class="mic" id="mic" aria-pressed="false">Speak</button>
+      <div class="micinfo">
+        <div class="langs" role="group" aria-label="Language">
+          <button class="chip" data-lang="kn-IN">ಕನ್ನಡ</button>
+          <button class="chip" data-lang="en-IN">English</button>
+          <button class="chip" data-lang="hi-IN">हिन्दी</button>
+        </div>
+        <div class="status" id="status">Tap Speak, then say items like "ಒಂದು ಕೆಜಿ ಸಕ್ಕರೆ, ಎರಡು ಪಾರ್ಲೆ ಜಿ".</div>
+        <button class="small" id="offlineBtn" hidden></button>
+      </div>
+    </div>
+    <div class="offline" id="offlineBox" hidden>
+      <div class="offhead"><b id="offTitle">Offline Kannada</b><span class="status" id="offState"></span></div>
+      <div class="bar" id="offBarWrap" hidden><i id="offBar"></i></div>
+      <div class="actions" style="margin-top:8px">
+        <button class="small primary" id="offGet" hidden>Download offline Kannada (~190 MB, use Wi-Fi)</button>
+        <button class="small" id="offDel" hidden>Delete model</button>
+      </div>
+      <div id="offCtl" hidden>
+        <label class="check"><input type="checkbox" id="useLocal"> Use offline Kannada (no internet)</label>
+        <div class="field2">
+          <label for="gain">Mic boost: <b id="gainVal"></b></label>
+          <input type="range" id="gain" min="1" max="4" step="0.5">
+        </div>
+        <div class="field2">
+          <label for="sens">Pick up softer voices: <b id="sensVal"></b></label>
+          <input type="range" id="sens" min="1" max="5" step="1">
+        </div>
+        <div class="level"><span>Mic level</span><div class="bar"><i id="lvl"></i></div></div>
+      </div>
+    </div>
+    <div class="heard" id="heard" aria-live="polite"><span class="interim">What you say appears here.</span></div>
+    <div class="sugg" id="sugg" hidden></div>
+    <div class="typerow">
+      <input type="text" id="typed" placeholder="Or type to test: 2 kg akki ardha kg sakkare" aria-label="Type items to test">
+      <button id="typedGo">Add</button>
+    </div>
+  </section>
+
+  <section aria-label="Bill">
+    <h2>Bill</h2>
+    <div class="tablewrap">
+      <table class="bill">
+        <thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Amount</th><th></th></tr></thead>
+        <tbody id="billBody"></tbody>
+      </table>
+    </div>
+    <p class="empty" id="billEmpty">No items yet.</p>
+    <div class="totalrow"><span id="itemCount">0 items</span><b id="total">₹0</b></div>
+    <div class="actions">
+      <button id="readBack" class="primary">Read bill back</button>
+      <button id="sayTotal">Read total</button>
+      <button id="undo">Undo</button>
+      <button id="newBill">New bill</button>
+      <button id="copyBill">Copy</button>
+    </div>
+    <label class="check"><input type="checkbox" id="needQty"> Add only when a quantity is said</label>
+    <details class="voicehelp">
+      <summary>Voice commands</summary>
+      <ul>
+        <li><b>ಬಿಲ್ ಓದಿ</b> / "read bill": read every item and the total</li>
+        <li><b>ಒಟ್ಟು</b> / "total": read the total</li>
+        <li><b>ತೆಗಿ</b> / "cancel": undo the last change</li>
+        <li><b>ಹೊಸ ಬಿಲ್</b> / "new bill": start again</li>
+        <li><b>ನಿಲ್ಲಿಸು</b> / "stop": stop listening</li>
+        <li><b>ಸಕ್ಕರೆ ಬೆಲೆ 50</b> / "sugar price 50": change a price</li>
+        <li><b>ಹೊಸ ಐಟಂ ಬಾದಾಮಿ 800 ಕೆಜಿ</b> / "add item cashew 900 per kg": add a new item</li>
+      </ul>
+    </details>
+    <details class="voicehelp">
+      <summary>What it heard</summary>
+      <ul class="heardlog" id="heardLog"></ul>
+    </details>
+  </section>
+
+  <section aria-label="Catalogue">
+    <h2>Items and prices</h2>
+    <p class="hint" style="margin:0 0 10px">Add every way people say an item: Kannada script, English, Hindi, brand names, and words the phone mishears. Prices below are examples; set your own.</p>
+    <div class="tablewrap">
+      <table class="cat">
+        <thead><tr><th>Item</th><th>Other names</th><th>Sold per</th><th class="num">Price ₹</th><th></th></tr></thead>
+        <tbody id="catBody"></tbody>
+      </table>
+    </div>
+    <div class="actions">
+      <button id="addItem">Add item</button>
+      <button id="resetCat">Restore example list</button>
+    </div>
+  </section>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+/*PARSER*/
+</script>
+<script>
+(() => {
+"use strict";
+const $ = id => document.getElementById(id);
+const load = (k, d) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
+const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+
+const EXAMPLE = [
+  { name: "Sugar", aliases: "sakkare, ಸಕ್ಕರೆ, cheeni, चीनी, shugar", unit: "kg", price: 45 },
+  { name: "Rice", aliases: "akki, ಅಕ್ಕಿ, chawal, चावल, sona masoori", unit: "kg", price: 60 },
+  { name: "Toor dal", aliases: "togari bele, ತೊಗರಿ ಬೇಳೆ, tur dal, dal, arhar dal", unit: "kg", price: 160 },
+  { name: "Atta", aliases: "godhi hittu, ಗೋಧಿ ಹಿಟ್ಟು, wheat flour, aata", unit: "kg", price: 50 },
+  { name: "Sunflower oil", aliases: "oil, enne, ಎಣ್ಣೆ, sunflower, tel", unit: "l", price: 150 },
+  { name: "Nandini milk", aliases: "milk, haalu, ಹಾಲು, nandini, doodh", unit: "packet", price: 27 },
+  { name: "Parle-G", aliases: "parle, parle g, ಪಾರ್ಲೆ ಜಿ, biscuit", unit: "packet", price: 10 },
+  { name: "Salt", aliases: "uppu, ಉಪ್ಪು, namak", unit: "packet", price: 28 },
+  { name: "Eggs", aliases: "egg, motte, ಮೊಟ್ಟೆ, ande, anda", unit: "piece", price: 7 },
+  { name: "Onion", aliases: "eerulli, ಈರುಳ್ಳಿ, pyaz, onions", unit: "kg", price: 40 },
+  { name: "Tomato", aliases: "tomatoes, ಟೊಮ್ಯಾಟೊ, tamatar, टमाटर", unit: "kg", price: 30 },
+  { name: "Tea powder", aliases: "tea, tea pudi, ಟೀ ಪುಡಿ, chai patti", unit: "kg", price: 480 },
+  { name: "Maggi", aliases: "ಮ್ಯಾಗಿ, maggi noodles", unit: "packet", price: 15 }
+].map((x, i) => ({ id: i + 1, ...x }));
+
+let CAT = load("voicebilling-catalogue", null) || EXAMPLE.map(x => ({ ...x }));
+let BILL = load("voicebilling-bill", []);
+let LANG = load("voicebilling-lang", "kn-IN");
+let prepared = null;
+const UNITS = { kg: "kg", g: "g", l: "litre", ml: "ml", packet: "packet", piece: "piece" };
+
+function prep() {
+  prepared = VB.prepareCatalogue(CAT.map(c => ({ ...c, aliases: String(c.aliases || "").split(",").map(s => s.trim()).filter(Boolean) })));
+}
+const saveCat = () => { save("voicebilling-catalogue", CAT); prep(); };
+const saveBill = () => save("voicebilling-bill", BILL);
+
+/* ---------- formatting ---------- */
+const rupees = n => "₹" + (Math.round(n * 100) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+function qtyLabel(q, unit) {
+  if (unit === "kg" && q < 1) return `${Math.round(q * 1000)} g`;
+  if (unit === "l" && q < 1) return `${Math.round(q * 1000)} ml`;
+  return `${+q.toFixed(3)} ${UNITS[unit] || unit}`;
+}
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast.h); toast.h = setTimeout(() => t.hidden = true, 2200); }
+
+/* ---------- bill ---------- */
+function renderBill() {
+  const tb = $("billBody"); tb.textContent = "";
+  let total = 0;
+  BILL.forEach((l, i) => {
+    const amt = l.qty * l.price; total += amt;
+    const tr = document.createElement("tr");
+    const tdItem = document.createElement("td"); tdItem.className = "item";
+    const b = document.createElement("b"); b.textContent = l.name; tdItem.append(b);
+    const sm = document.createElement("small"); sm.textContent = `heard "${l.heard}"`; tdItem.append(sm);
+    if (l.note) { const n = document.createElement("small"); n.className = "note"; n.textContent = " · " + l.note; tdItem.append(n); }
+    const tdQ = document.createElement("td"); tdQ.className = "num";
+    const qi = document.createElement("input"); qi.type = "number"; qi.className = "qty"; qi.step = "any"; qi.min = "0"; qi.inputMode = "decimal";
+    qi.value = +l.qty.toFixed(3); qi.id = "qty-" + l.key; qi.setAttribute("aria-label", `Quantity of ${l.name} in ${UNITS[l.unit] || l.unit}`);
+    qi.onchange = () => { const v = parseFloat(qi.value); if (v >= 0) { l.qty = v; saveBill(); renderBill(); } };
+    const un = document.createElement("span"); un.className = "qtyunit"; un.textContent = UNITS[l.unit] || l.unit;
+    tdQ.append(qi, un);
+    const tdR = document.createElement("td"); tdR.className = "num"; tdR.textContent = `${rupees(l.price)}/${l.unit === "l" ? "L" : l.unit}`;
+    const tdA = document.createElement("td"); tdA.className = "num"; tdA.textContent = rupees(amt);
+    const tdX = document.createElement("td"); const x = document.createElement("button"); x.className = "small"; x.textContent = "✕"; x.setAttribute("aria-label", "Remove " + l.name);
+    x.onclick = () => { BILL.splice(i, 1); saveBill(); renderBill(); }; tdX.append(x);
+    tr.append(tdItem, tdQ, tdR, tdA, tdX); tb.append(tr);
+  });
+  $("billEmpty").hidden = BILL.length > 0;
+  $("total").textContent = rupees(total);
+  $("itemCount").textContent = BILL.length === 1 ? "1 item" : `${BILL.length} items`;
+  return total;
+}
+const billTotal = () => BILL.reduce((s, l) => s + l.qty * l.price, 0);
+
+/* ---------- catalogue editor ---------- */
+function renderCat() {
+  const tb = $("catBody"); tb.textContent = "";
+  CAT.forEach((c, i) => {
+    const tr = document.createElement("tr");
+    const mk = (cls, val, label, type = "text") => {
+      const td = document.createElement("td"); td.className = cls;
+      const inp = document.createElement("input"); inp.type = type; inp.value = val; inp.id = `cat-${cls}-${c.id}`; inp.setAttribute("aria-label", label);
+      if (type === "number") { inp.step = "any"; inp.min = "0"; inp.inputMode = "decimal"; }
+      td.append(inp); return [td, inp];
+    };
+    const [tdN, inN] = mk("c-name", c.name, "Item name");
+    const [tdA, inA] = mk("c-alias", c.aliases, "Other names, separated by commas");
+    const tdU = document.createElement("td"); const sel = document.createElement("select"); sel.id = "cat-unit-" + c.id; sel.setAttribute("aria-label", "Sold per");
+    Object.entries(UNITS).forEach(([v, t]) => { const o = document.createElement("option"); o.value = v; o.textContent = t; sel.append(o); });
+    sel.value = c.unit; tdU.append(sel);
+    const [tdP, inP] = mk("c-price", c.price, "Price in rupees", "number");
+    const tdX = document.createElement("td"); const x = document.createElement("button"); x.className = "small"; x.textContent = "✕"; x.setAttribute("aria-label", "Delete " + c.name);
+    let armed = false;
+    x.onclick = () => { if (!armed) { armed = true; x.textContent = "Sure?"; setTimeout(() => { armed = false; x.textContent = "✕"; }, 3000); return; } CAT.splice(i, 1); saveCat(); renderCat(); };
+    tdX.append(x);
+    inN.onchange = () => { c.name = inN.value.trim() || c.name; saveCat(); };
+    inA.onchange = () => { c.aliases = inA.value; saveCat(); };
+    sel.onchange = () => { c.unit = sel.value; saveCat(); };
+    inP.onchange = () => { c.price = parseFloat(inP.value) || 0; saveCat(); };
+    tr.append(tdN, tdA, tdU, tdP, tdX); tb.append(tr);
+  });
+}
+
+/* ---------- understanding what was said ---------- */
+let NEED_QTY = load("voicebilling-needqty", true);
+let UNDO = [];                     // last changes, newest last: {t:"add",key} | {t:"qty",key,prev} | {t:"cat",prev}
+let LOG = load("voicebilling-heard", []);
+const newKey = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+function bestParse(alts) {
+  let best = null;
+  alts.forEach((text, rank) => {
+    const r = VB.parse(text, prepared);
+    const avg = r.lines.length ? r.lines.reduce((s, l) => s + l.match, 0) / r.lines.length : 0;
+    const said = r.lines.filter(l => l.qtySaid).length;
+    const score = said * 12 + r.lines.length * 10 - r.unknown.length * 2 + avg / 100 - rank * 0.5;
+    if (!best || score > best.score) best = { ...r, text, score };
+  });
+  return best;
+}
+
+// Adds one line, handling repeats: same item and same quantity again = a repeat, ignored;
+// same item with a new quantity = a correction, the quantity is replaced (Undo puts it back).
+function addLine(l) {
+  const existing = [...BILL].reverse().find(b => b.id === l.id);
+  if (existing && Math.abs(existing.qty - l.qty) < 1e-6) return `${l.name} already in bill`;
+  if (existing) {
+    UNDO.push({ t: "qty", key: existing.key, prev: existing.qty, prevHeard: existing.heard });
+    const was = qtyLabel(existing.qty, existing.unit);
+    existing.qty = l.qty; existing.heard = l.heard;
+    return `${l.name} changed ${was} → ${qtyLabel(l.qty, l.unit)}`;
+  }
+  const key = newKey();
+  BILL.push({ ...l, key });
+  UNDO.push({ t: "add", key });
+  return `added ${l.name} ${qtyLabel(l.qty, l.unit)}`;
+}
+
+function handleFinal(alts) {
+  alts = alts.map(a => a.trim()).filter(Boolean);
+  if (!alts.length) return;
+  showSugg([]);
+  const cmd = VB.command(alts[0]);
+  if (cmd) { logHeard(alts[0], `command: ${cmd}`); showHeard(alts[0], `command: ${cmd}`); runCommand(cmd); return; }
+
+  for (const text of alts.slice(0, 2)) {
+    const pc = VB.priceCommand(text, prepared);
+    if (pc) { const msg = applyPrice(pc); logHeard(text, msg); showHeard(text, msg); return; }
+  }
+
+  const r = bestParse(alts);
+  const sure = r.lines.filter(l => l.qtySaid || !NEED_QTY);
+  const maybe = r.lines.filter(l => !l.qtySaid && NEED_QTY);
+  if (!sure.length) {
+    const msg = maybe.length ? "item named without a quantity · tap to add" : "no item · ignored";
+    logHeard(r.text, msg); showHeard(r.text, msg, false); showSugg(maybe);
+    return;
+  }
+  const notes = sure.map(addLine);
+  saveBill(); renderBill();
+  const msg = notes.join(" · ") + (r.unknown.length > 3 ? " · other talk ignored" : "");
+  logHeard(r.text, msg); showHeard(r.text, msg); showSugg(maybe);
+}
+
+function applyPrice(pc) {
+  UNDO.push({ t: "cat", prev: JSON.parse(JSON.stringify(CAT)), prevBill: JSON.parse(JSON.stringify(BILL)) });
+  if (pc.kind === "price") {
+    const c = CAT.find(x => x.id === pc.id); if (!c) return "item not found";
+    c.price = pc.price; if (pc.unit) c.unit = pc.unit;
+    // Lines already on this bill use the new price too.
+    BILL.forEach(b => { if (b.id === c.id && b.unit === c.unit) b.price = c.price; });
+    saveCat(); renderCat(); saveBill(); renderBill();
+    const msg = `${c.name} price set to ${rupees(pc.price)}/${unitShort(c.unit)}`; toast(msg); return msg;
+  }
+  const id = Math.max(0, ...CAT.map(c => c.id)) + 1;
+  CAT.push({ id, name: pc.name, aliases: pc.alias, unit: pc.unit, price: pc.price });
+  saveCat(); renderCat();
+  const msg = `new item ${pc.name} at ${rupees(pc.price)}/${unitShort(pc.unit)}`; toast(msg); return msg;
+}
+const unitShort = u => u === "l" ? "L" : u;
+
+function showSugg(lines) {
+  const box = $("sugg"); box.textContent = "";
+  box.hidden = !lines.length;
+  if (!lines.length) return;
+  box.append("Add?");
+  lines.forEach(l => {
+    const b = document.createElement("button"); b.textContent = `+ ${l.name}`;
+    b.onclick = () => { const m = addLine(l); saveBill(); renderBill(); toast(m); b.remove(); if (!box.querySelector("button")) box.hidden = true; };
+    box.append(b);
+  });
+}
+
+function showHeard(text, result, warn) {
+  const h = $("heard"); h.textContent = "";
+  const t = document.createElement("div"); t.textContent = `“${text}”`;
+  const r = document.createElement("div"); r.className = warn ? "miss" : "status"; r.textContent = result;
+  h.append(t, r);
+}
+// Loudness of the phrase being handled (0-100), sent by the app with each phrase. Lets us see
+// how much louder the shopkeeper is than the people around him, to set a "closeness" filter later.
+let LOUD = null;
+function logHeard(text, result) {
+  LOG.unshift({ t: Date.now(), text, result, loud: LOUD ? LOUD.v : null, eng: LOUD ? LOUD.e : "" }); LOG = LOG.slice(0, 30); save("voicebilling-heard", LOG); renderLog();
+}
+function renderLog() {
+  const ul = $("heardLog"); ul.textContent = "";
+  if (!LOG.length) { const li = document.createElement("li"); li.textContent = "Nothing yet."; ul.append(li); return; }
+  LOG.forEach(e => {
+    const li = document.createElement("li"); const tm = document.createElement("time"); const res = document.createElement("span");
+    tm.textContent = new Date(e.t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    res.className = "res"; res.textContent = e.result;
+    li.append(tm, document.createTextNode(`“${e.text}”`), res);
+    if (typeof e.loud === "number") {
+      const ld = document.createElement("span"); ld.className = "loud";
+      const bar = document.createElement("b"); bar.style.width = Math.max(2, Math.round(e.loud * 0.9)) + "px";
+      ld.append(bar, document.createTextNode(`loudness ${e.loud}` + (e.eng === "google" ? " · Google scale" : "")));
+      li.append(ld);
+    }
+    ul.append(li);
+  });
+}
+
+function undoLast() {
+  const u = UNDO.pop();
+  if (!u) { const l = BILL.pop(); saveBill(); renderBill(); toast(l ? `Removed ${l.name}` : "Nothing to undo"); return; }
+  if (u.t === "add") { const i = BILL.findIndex(b => b.key === u.key); if (i >= 0) { toast(`Removed ${BILL[i].name}`); BILL.splice(i, 1); } }
+  if (u.t === "qty") { const b = BILL.find(b => b.key === u.key); if (b) { b.qty = u.prev; b.heard = u.prevHeard; toast(`${b.name} back to ${qtyLabel(b.qty, b.unit)}`); } }
+  if (u.t === "cat") { CAT = u.prev; if (u.prevBill) BILL = u.prevBill; saveCat(); renderCat(); toast("Price change undone"); }
+  saveBill(); renderBill();
+}
+
+function runCommand(cmd) {
+  if (cmd === "undo") undoLast();
+  if (cmd === "clear") { BILL = []; UNDO = []; saveBill(); renderBill(); toast("New bill started"); }
+  if (cmd === "total") sayTotal();
+  if (cmd === "readback") readBack();
+  if (cmd === "stop") stopListening();
+}
+
+/* ---------- the phone's own speech (inside the Android app) ---------- */
+const NATIVE = !!window.AndroidSpeech;
+let resumeAfterVoice = false;
+const itemNames = () => CAT.flatMap(c => [c.name, ...String(c.aliases).split(",")]).map(s => s.trim()).filter(Boolean);
+
+/* ---------- speaking: total and read-back ---------- */
+const SAY = {
+  "kn-IN": { total: n => `ಒಟ್ಟು ${n} ರೂಪಾಯಿ`, rs: n => `${n} ರೂಪಾಯಿ`, empty: "ಬಿಲ್ ಖಾಲಿ ಇದೆ",
+    units: { kg: "ಕೆಜಿ", g: "ಗ್ರಾಂ", l: "ಲೀಟರ್", ml: "ಎಂ ಎಲ್", packet: "ಪ್ಯಾಕೆಟ್", piece: "" },
+    frac: { 0.5: "ಅರ್ಧ", 0.25: "ಕಾಲು", 0.75: "ಮುಕ್ಕಾಲು", 1.5: "ಒಂದೂವರೆ", 2.5: "ಎರಡೂವರೆ" }, script: /[ಀ-೿]/ },
+  "hi-IN": { total: n => `कुल ${n} रुपये`, rs: n => `${n} रुपये`, empty: "बिल खाली है",
+    units: { kg: "किलो", g: "ग्राम", l: "लीटर", ml: "एम एल", packet: "पैकेट", piece: "" },
+    frac: { 0.5: "आधा", 0.25: "पाव", 0.75: "पौना", 1.5: "डेढ़", 2.5: "ढाई" }, script: /[ऀ-ॿ]/ },
+  "en-IN": { total: n => `Total ${n} rupees`, rs: n => `${n} rupees`, empty: "The bill is empty",
+    units: { kg: "kg", g: "grams", l: "litre", ml: "ml", packet: "packet", piece: "" },
+    frac: { 0.5: "half", 0.25: "quarter", 0.75: "three quarter", 1.5: "one and a half" }, script: /[A-Za-z]/ }
+};
+function spokenName(line) {
+  const sp = SAY[LANG]; const c = CAT.find(x => x.id === line.id);
+  if (LANG !== "en-IN" && c) { const a = String(c.aliases).split(",").map(s => s.trim()).find(a => sp.script.test(a)); if (a) return a; }
+  return line.name;
+}
+function spokenQty(line) {
+  const sp = SAY[LANG]; let q = line.qty, u = line.unit;
+  if (u === "kg" && q < 1 && !sp.frac[q]) { q = Math.round(q * 1000); u = "g"; }
+  if (u === "l" && q < 1 && !sp.frac[q]) { q = Math.round(q * 1000); u = "ml"; }
+  return `${sp.frac[q] || +q.toFixed(3)} ${sp.units[u] ?? u}`.trim();
+}
+function speakText(text) {
+  toast(text.length > 60 ? "Reading the bill…" : text);
+  resumeAfterVoice = listening; if (listening) stopListening();
+  if (NATIVE) { AndroidSpeech.speak(text, LANG); return; }
+  if (!("speechSynthesis" in window)) return;
+  const u = new SpeechSynthesisUtterance(text); u.lang = LANG;
+  const v = speechSynthesis.getVoices().find(v => v.lang.replace("_", "-").startsWith(LANG.slice(0, 2))); if (v) u.voice = v;
+  u.onend = u.onerror = () => { if (resumeAfterVoice) { resumeAfterVoice = false; startListening(); } };
+  speechSynthesis.cancel(); speechSynthesis.speak(u);
+}
+const money = n => Math.round(n * 100) / 100;
+function sayTotal() { speakText(SAY[LANG].total(money(billTotal()))); }
+function readBack() {
+  const sp = SAY[LANG];
+  if (!BILL.length) { speakText(sp.empty); return; }
+  const parts = BILL.map(l => `${spokenName(l)}, ${spokenQty(l)}, ${sp.rs(money(l.qty * l.price))}`);
+  speakText(parts.join(". ") + ". " + sp.total(money(billTotal())));
+}
+
+/* ---------- speech recognition ---------- */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null, listening = false, offlineState = "unknown";
+const OFF_KEY = () => "voicebilling-offline-" + LANG;
+const LANG_NAME = { "kn-IN": "Kannada", "en-IN": "English", "hi-IN": "Hindi" };
+const ENGINE_LABEL = NATIVE ? {
+  available: () => `${LANG_NAME[LANG]}: offline`, downloadable: () => `${LANG_NAME[LANG]}: online now · offline pack available`,
+  downloading: () => `Downloading ${LANG_NAME[LANG]} pack… (online until done)`, online: () => `${LANG_NAME[LANG]}: Google online (needs internet)`,
+  unavailable: () => `${LANG_NAME[LANG]}: Google online (needs internet)`, unknown: () => `${LANG_NAME[LANG]}: Google online (needs internet)`
+} : {
+  available: () => "Offline recognition ready", downloadable: () => "Offline pack can be downloaded", downloading: () => "Downloading offline pack…",
+  online: () => "Needs internet", unavailable: () => "No offline pack for this language; needs internet",
+  unsupported: () => "Uses online recognition (needs internet)", unknown: () => "Chrome speech recognition (may need internet)"
+};
+/* ---------- offline Kannada model (inside the Android app) ---------- */
+const HAS_LOCAL = NATIVE && typeof AndroidSpeech.modelStatus === "function";
+let modelState = "missing";
+let USE_LOCAL = load("voicebilling-uselocal", true);
+let GAIN = load("voicebilling-gain", 1.5), SENS = load("voicebilling-sens", 3);
+const sensToThreshold = v => [0.7, 0.6, 0.5, 0.4, 0.3][v - 1] || 0.5;
+const localActive = () => HAS_LOCAL && LANG === "kn-IN" && USE_LOCAL && modelState === "ready";
+function pushMic() { if (HAS_LOCAL) AndroidSpeech.setMic(GAIN, sensToThreshold(SENS)); }
+function renderOffline(ev) {
+  const box = $("offlineBox");
+  box.hidden = !HAS_LOCAL || LANG !== "kn-IN";
+  if (box.hidden) return;
+  if (ev && ev.state) modelState = ev.state;
+  const st = $("offState"), get = $("offGet"), del = $("offDel"), barW = $("offBarWrap");
+  get.hidden = !(modelState === "missing" || modelState === "error");
+  del.hidden = modelState !== "ready";
+  $("offCtl").hidden = modelState !== "ready";
+  barW.hidden = modelState !== "downloading";
+  if (modelState === "missing") st.textContent = "not downloaded";
+  if (modelState === "ready") st.textContent = `ready · ${ev && ev.mb ? ev.mb + " MB · " : ""}works without internet`;
+  if (modelState === "downloading") {
+    const pct = ev && typeof ev.pct === "number" ? ev.pct : null;
+    st.textContent = pct === null ? "starting download…" : `downloading ${ev.file === "tokens.txt" ? "word list" : "model"} · ${pct}%${ev.mb ? " · " + ev.mb + " MB" : ""}`;
+    $("offBar").style.width = (pct || 0) + "%";
+  }
+  if (modelState === "error") { st.textContent = (ev && ev.message) || "Download failed. Tap to try again."; get.textContent = "Continue download"; }
+  showEngine();
+}
+
+function showEngine() {
+  if (localActive()) { $("engine").textContent = "Kannada: offline on this phone"; $("offlineBtn").hidden = true; return; }
+  $("engine").textContent = (ENGINE_LABEL[offlineState] || ENGINE_LABEL.unknown)();
+  const btn = $("offlineBtn");
+  btn.hidden = (!SR && !NATIVE) || ["available", "unavailable", "unsupported", "online", "downloading"].includes(offlineState);
+  btn.textContent = offlineState === "downloadable" ? `Download ${LANG_NAME[LANG]} for offline use` : "Check offline mode";
+}
+
+async function checkOffline() {
+  if (NATIVE) { $("engine").textContent = "Checking offline mode…"; AndroidSpeech.checkOffline(LANG); return; }
+  if (!SR) { $("engine").textContent = "Speech recognition not available in this browser. Use Chrome."; $("mic").disabled = true; return; }
+  $("offlineBtn").disabled = true; $("engine").textContent = "Checking offline mode…";
+  try {
+    let st = null;
+    if (typeof SR.available === "function") st = await SR.available({ langs: [LANG], processLocally: true });
+    else if (typeof SR.availableOnDevice === "function") st = await SR.availableOnDevice(LANG);
+    offlineState = st || "unsupported";
+  } catch { offlineState = "unsupported"; }
+  save(OFF_KEY(), offlineState);
+  $("offlineBtn").disabled = false; showEngine();
+}
+async function installOffline() {
+  if (NATIVE) { AndroidSpeech.downloadOffline(LANG); return; }
+  $("offlineBtn").disabled = true; $("engine").textContent = "Downloading offline pack…";
+  try {
+    if (typeof SR.install === "function") await SR.install({ langs: [LANG], processLocally: true });
+    else if (typeof SR.installOnDevice === "function") await SR.installOnDevice(LANG);
+  } catch {}
+  $("offlineBtn").disabled = false; checkOffline();
+}
+$("offlineBtn").onclick = () => offlineState === "downloadable" ? installOffline() : checkOffline();
+
+function showInterim(text) { const h = $("heard"); h.textContent = ""; const s = document.createElement("span"); s.className = "interim"; s.textContent = text; h.append(s); }
+function micUi(on) {
+  $("mic").classList.toggle("on", on); $("mic").textContent = on ? "Stop" : "Speak"; $("mic").setAttribute("aria-pressed", String(on));
+}
+
+// Events from the Android app
+const NATIVE_ERRORS = {
+  "mic-denied": "Microphone not allowed. Allow it in Settings › Apps › Voice Billing › Permissions.",
+  "needs-offline-pack": "This language isn't downloaded for offline use. Tap the button above to download it.",
+  "needs-internet": "No internet right now. Kannada needs Google online on this phone; it will continue when the connection is back.",
+  "language-not-supported": "The phone's recognizer doesn't support this language. Try another.",
+  "no-recognizer": "No speech recognizer on this phone. Install or update the Google app from the Play Store.",
+  "model-failed": "The offline Kannada model couldn't start. Switched to Google online; try deleting and downloading the model again.",
+  "vad-failed": "Offline listening couldn't start. Switched to Google online.",
+  "mic-error": "The microphone had a problem.",
+  "decode-error": "One phrase couldn't be read."
+};
+const CRASH_PHASE = {
+  model: "It closed while loading the offline Kannada model. Offline Kannada is switched off, so billing uses Google online for now.",
+  vad: "It closed while starting the offline voice detector. Offline Kannada is switched off, so billing uses Google online for now.",
+  decode: "It closed while the offline model was reading your first phrase. Offline Kannada is switched off, so billing uses Google online for now."
+};
+function showCrash(ev) {
+  $("crashBox").hidden = false;
+  $("crashMsg").textContent = (CRASH_PHASE[ev.phase] || "It closed because of an error.") + " Tap Copy report and send it to fix the cause.";
+  const when = ev.at ? new Date(ev.at).toLocaleString() : "";
+  $("crashText").textContent = [`Voice Billing ${ev.version} · ${ev.device} · ${when}`, `Step: ${ev.phase || "-"}`,
+    ev.stack ? "Error:\n" + ev.stack : "", ev.log ? "Log:\n" + ev.log : "Log: (empty)"].filter(Boolean).join("\n\n");
+  if (CRASH_PHASE[ev.phase] && HAS_LOCAL) {
+    USE_LOCAL = false; save("voicebilling-uselocal", false); AndroidSpeech.setEngine(false);
+    $("useLocal").checked = false; renderOffline();
+  }
+}
+window.onNativeSpeech = ev => {
+  if (ev.type === "crash") { showCrash(ev); return; }
+  if (ev.type === "model") { renderOffline(ev); return; }
+  if (ev.type === "loading") { $("status").textContent = "Loading the Kannada model…"; return; }
+  if (ev.type === "hearing") { if (listening) $("status").textContent = ev.on ? "Hearing…" : "Listening offline… say item and quantity."; return; }
+  if (ev.type === "level") { $("lvl").style.width = Math.max(0, Math.min(100, (ev.db + 60) / 50 * 100)) + "%"; return; }
+  if (ev.type === "partial") showInterim(ev.texts[0] || "");
+  else if (ev.type === "final") { LOUD = (typeof ev.loud === "number" && ev.loud >= 0) ? { v: ev.loud, e: ev.engine || "" } : null; handleFinal(ev.texts || []); LOUD = null; }
+  else if (ev.type === "ready") { if (listening) $("status").textContent = `Listening ${ev.offline ? "offline" : "via Google online"}… say item and quantity.`; }
+  else if (ev.type === "state") {
+    if (!ev.listening && listening) { listening = false; micUi(false); }
+    else if (ev.listening && !listening) { listening = true; micUi(true); $("status").textContent = "Listening again."; }
+  }
+  else if (ev.type === "error") {
+    $("status").textContent = (NATIVE_ERRORS[ev.code] || `Speech problem (${ev.code}).`) + (ev.fatal ? "" : " Still listening…");
+    if (ev.fatal) { listening = false; micUi(false); }
+    if (ev.code === "model-failed" || ev.code === "vad-failed") { USE_LOCAL = false; $("useLocal").checked = false; AndroidSpeech.setEngine(false); save("voicebilling-uselocal", false); renderOffline(); if (ev.detail) logHeard("(offline model)", ev.detail); }
+  }
+  else if (ev.type === "offline") { if (ev.lang === LANG) { offlineState = ev.state; save(OFF_KEY(), offlineState); showEngine(); } }
+  else if (ev.type === "ttsdone") { if (resumeAfterVoice) { resumeAfterVoice = false; startListening(); } }
+  else if (ev.type === "toast") toast(ev.text);
+};
+
+function startListening() {
+  if (NATIVE) {
+    AndroidSpeech.start(LANG, JSON.stringify(itemNames()));
+    listening = true; micUi(true);
+    $("status").textContent = "Starting…";
+    return;
+  }
+  if (!SR) return;
+  rec = new SR();
+  rec.lang = LANG; rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 3;
+  if (offlineState === "available" && "processLocally" in rec) rec.processLocally = true;
+  // Bias recognition towards this shop's item names where the browser supports it.
+  if (offlineState === "available" && window.SpeechRecognitionPhrase) {
+    try { rec.phrases = itemNames().slice(0, 200).map(p => new SpeechRecognitionPhrase(p, 3)); } catch {}
+  }
+  rec.onresult = e => {
+    let interim = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const r = e.results[i];
+      if (r.isFinal) handleFinal(Array.from(r).map(a => a.transcript));
+      else interim += r[0].transcript;
+    }
+    if (interim) showInterim(interim);
+  };
+  rec.onerror = e => {
+    const msg = { "not-allowed": "Microphone blocked. Allow it for Chrome and for this page.", "network": "Recognition needs internet for this language right now.", "language-not-supported": "This language isn't supported here. Try another.", "no-speech": "" }[e.error];
+    if (msg) { $("status").textContent = msg; if (e.error !== "no-speech") stopListening(); }
+  };
+  rec.onend = () => { if (listening) setTimeout(() => { try { rec.start(); } catch {} }, 250); };   // phones stop after a pause; keep going
+  try { rec.start(); } catch {}
+  listening = true; micUi(true);
+  $("status").textContent = "Listening… say item and quantity. Pause briefly between customers' lists.";
+}
+function stopListening() {
+  listening = false;
+  if (NATIVE) AndroidSpeech.stop();
+  else { try { rec && rec.stop(); } catch {} }
+  micUi(false);
+  $("status").textContent = "Stopped. Tap Speak to continue.";
+}
+
+/* ---------- wiring ---------- */
+function setLang(l) {
+  LANG = l; save("voicebilling-lang", l);
+  document.querySelectorAll(".chip").forEach(c => c.setAttribute("aria-pressed", String(c.dataset.lang === l)));
+  offlineState = load(OFF_KEY(), "unknown");
+  if (listening) { stopListening(); startListening(); }
+  if (NATIVE) { renderOffline(); showEngine(); AndroidSpeech.checkOffline(l); return; }
+  if (!SR) { $("engine").textContent = "Speech recognition not available in this browser. Use Chrome."; $("mic").disabled = true; return; }
+  showEngine();
+}
+document.querySelectorAll(".chip").forEach(c => c.onclick = () => setLang(c.dataset.lang));
+$("mic").onclick = () => listening ? stopListening() : startListening();
+$("typedGo").onclick = () => { const v = $("typed").value; if (v.trim()) { handleFinal([v]); $("typed").value = ""; } };
+$("typed").addEventListener("keydown", e => { if (e.key === "Enter") $("typedGo").click(); });
+$("sayTotal").onclick = sayTotal;
+$("undo").onclick = () => runCommand("undo");
+$("readBack").onclick = readBack;
+$("needQty").checked = NEED_QTY;
+$("needQty").onchange = () => { NEED_QTY = $("needQty").checked; save("voicebilling-needqty", NEED_QTY); };
+$("newBill").onclick = () => runCommand("clear");
+$("copyBill").onclick = async () => {
+  const lines = BILL.map(l => `${l.name}  ${qtyLabel(l.qty, l.unit)}  ${rupees(l.qty * l.price)}`);
+  const text = lines.concat(["Total " + rupees(billTotal())]).join("\n");
+  if (NATIVE) { AndroidSpeech.copy(text); toast("Bill copied"); return; }
+  try { await navigator.clipboard.writeText(text); toast("Bill copied"); } catch { toast("Couldn't copy on this device"); }
+};
+$("addItem").onclick = () => { const id = Math.max(0, ...CAT.map(c => c.id)) + 1; CAT.push({ id, name: "New item", aliases: "", unit: "kg", price: 0 }); saveCat(); renderCat(); const el = $("cat-c-name-" + id); el && el.focus(); el && el.select(); };
+let resetArmed = false;
+$("resetCat").onclick = () => {
+  if (!resetArmed) { resetArmed = true; $("resetCat").textContent = "Tap again to replace your list"; setTimeout(() => { resetArmed = false; $("resetCat").textContent = "Restore example list"; }, 3000); return; }
+  CAT = EXAMPLE.map(x => ({ ...x })); saveCat(); renderCat(); toast("Example list restored");
+};
+
+$("crashHide").onclick = () => { $("crashBox").hidden = true; };
+$("crashCopy").onclick = () => { const t = $("crashText").textContent; if (NATIVE) AndroidSpeech.copy(t); else navigator.clipboard?.writeText(t).catch(() => {}); toast("Report copied"); };
+if (HAS_LOCAL) {
+  $("useLocal").checked = USE_LOCAL; AndroidSpeech.setEngine(USE_LOCAL);
+  $("useLocal").onchange = () => { USE_LOCAL = $("useLocal").checked; save("voicebilling-uselocal", USE_LOCAL); AndroidSpeech.setEngine(USE_LOCAL); if (listening) { stopListening(); startListening(); } showEngine(); };
+  const g = $("gain"), sv = $("sens");
+  g.value = GAIN; sv.value = SENS;
+  const showMic = () => { $("gainVal").textContent = GAIN === 1 ? "off" : `${GAIN}×`; $("sensVal").textContent = ["low", "medium-low", "medium", "high", "very high"][SENS - 1]; };
+  g.oninput = () => { GAIN = +g.value; save("voicebilling-gain", GAIN); showMic(); pushMic(); };
+  sv.oninput = () => { SENS = +sv.value; save("voicebilling-sens", SENS); showMic(); pushMic(); };
+  sv.onchange = () => { if (listening && localActive()) { stopListening(); startListening(); } };   // detector picks it up on restart
+  showMic(); pushMic();
+  $("offGet").onclick = () => { AndroidSpeech.downloadModel(); modelState = "downloading"; renderOffline({ state: "downloading" }); };
+  let delArmed = false;
+  $("offDel").onclick = () => {
+    if (!delArmed) { delArmed = true; $("offDel").textContent = "Tap again to delete"; setTimeout(() => { delArmed = false; $("offDel").textContent = "Delete model"; }, 3000); return; }
+    AndroidSpeech.deleteModel();
+  };
+  AndroidSpeech.modelStatus();
+}
+prep(); renderCat(); renderBill(); renderLog(); setLang(LANG);
+})();
+</script>
+</body>
+</html>
