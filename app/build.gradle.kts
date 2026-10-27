@@ -1,3 +1,5 @@
+import java.net.URI
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -61,7 +63,7 @@ for ((path, url) in speechFiles) {
         logger.lifecycle("Downloading $url")
         f.parentFile.mkdirs()
         val part = file("$path.part")
-        java.net.URI(url).toURL().openStream().use { input -> part.outputStream().use { input.copyTo(it) } }
+        URI(url).toURL().openStream().use { input -> part.outputStream().use { out -> input.copyTo(out) } }
         part.renameTo(f)
     }
 }
