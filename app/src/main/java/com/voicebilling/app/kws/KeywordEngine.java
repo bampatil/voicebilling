@@ -30,6 +30,7 @@ public final class KeywordEngine {
         public double expires;         // numbers only
         public String rival;           // another reading of the same moment that scored almost as well ("not sure")
         public Hit unit;               // numbers only: unit said after the number
+        public Hit partner;            // the item (for a number) or number (for an item) it was paired with
         public String text() { return word.text + (unit != null ? " " + unit.word.text : ""); }
     }
 
@@ -112,7 +113,9 @@ public final class KeywordEngine {
             Hit same = null;
             for (Hit x : events) {
                 if (x.word.kind != h.word.kind) continue;
-                boolean near = !(h.end < x.start - 0.2 || h.start > x.end + 0.2);
+                // items: the same item within 0.8 s is the same mention seen by another window (not a second order)
+                double gap = h.word.kind == Keywords.ITEM ? 0.8 : 0.2;
+                boolean near = !(h.end < x.start - gap || h.start > x.end + gap);
                 double overlap = Math.min(h.end, x.end) - Math.max(h.start, x.start);
                 // same word seen again by a later window, or another reading of the same moment (ಒಂದ / ಒಂದೂವರೆ)
                 if ((near && sameValue(x, h)) || overlap > 0.5 * Math.min(h.end - h.start, x.end - x.start)) { same = x; break; }
@@ -130,7 +133,15 @@ public final class KeywordEngine {
             arrive(h, windowEnd, out);
         }
         expire(windowEnd, out);
-        return out;
+        // the same order twice in one go (two readings of one moment) is sent once
+        List<Result> uniq = new ArrayList<>();
+        for (Result r : out) {
+            boolean dup = false;
+            for (Result u : uniq) if (u.kind.equals(r.kind) && u.item.word.key.equals(r.item.word.key) && u.qty() == r.qty()
+                    && java.util.Objects.equals(u.unit(), r.unit())) { dup = true; break; }
+            if (!dup) uniq.add(r);
+        }
+        return uniq;
     }
 
     private static boolean sameValue(Hit a, Hit b) {
@@ -152,16 +163,15 @@ public final class KeywordEngine {
                 }
             }
             h.expires = h.end + numBefore;
-            // A waiting item: said after the number but noticed first ("ಒಂದು ಟೀ", usual order),
-            // or said before the number ("ಟೀ ಒಂದು").
+            // Usual order "ಒಂದು ಟೀ": an item said after this number but noticed first. (A number after an item,
+            // "ಟೀ ಒಂದು", is decided later in expire(): the number may belong to the next item instead.)
             Hit item = null;
             for (Hit i : events) {
                 if (i.used || i.word.kind != Keywords.ITEM) continue;
-                double after = i.start - h.end, before = h.start - i.end;
-                boolean ok = (after >= -0.2 && after <= numBefore) || (before >= -0.2 && before <= numAfter);
-                if (ok && (item == null || Math.abs(i.start - h.end) < Math.abs(item.start - h.end))) item = i;
+                double after = i.start - h.end;
+                if (after >= -0.2 && after <= numBefore && (item == null || i.start < item.start)) item = i;
             }
-            if (item != null) { h.used = true; item.used = true; out.add(new Result("order", h, item, now)); }
+            if (item != null) pair(h, item, now, out);
         } else if (h.word.kind == Keywords.UNIT) {
             Hit n = null;
             for (Hit x : events) {
@@ -170,25 +180,43 @@ public final class KeywordEngine {
             if (n == null) return;
             n.unit = h;
             n.expires = Math.min(h.end + unitExtra, n.start + maxSpan);
-            if (n.used) {     // the order was already made ("ಸಕ್ಕರೆ ಎರಡು ಕೆಜಿ"): send it again with the unit
-                for (Hit i : events) {
-                    if (i.word.kind == Keywords.ITEM && i.used && Math.abs(i.end - n.start) <= numAfter + 0.5) { out.add(new Result("order", n, i, now)); break; }
-                }
-            }
+            if (n.used && n.partner != null) out.add(new Result("order", n, n.partner, now));   // order already made: send it again with the unit
         } else {
             Hit n = null;
             for (Hit x : events) {
                 if (!x.used && x.word.kind == Keywords.NUM && x.end <= h.start + 0.2 && h.start <= x.expires && (n == null || x.end > n.end)) n = x;
             }
-            if (n != null) { n.used = true; h.used = true; out.add(new Result("order", n, h, now)); }
+            if (n != null) pair(n, h, now, out);
         }
     }
+
+    private void pair(Hit num, Hit item, double now, List<Result> out) {
+        num.used = true; item.used = true; num.partner = item; item.partner = num;
+        out.add(new Result("order", num, item, now));
+    }
+
+    /** How long a number after an item waits for a following item before it is given to the item before it. */
+    public double numAfterWait = 1.5;
 
     private void expire(double now, List<Result> out) {
         Iterator<Hit> it = events.iterator();
         while (it.hasNext()) {
             Hit h = it.next();
-            if (h.word.kind == Keywords.ITEM && !h.used && now > h.end + numAfter + 0.5) {
+            // "ಟೀ ಒಂದು": a number nobody claimed after numAfterWait goes to a waiting item just before it
+            if (h.word.kind == Keywords.NUM && !h.used && now > h.end + numAfterWait + 0.15) {
+                Hit item = null;
+                for (Hit i : events) {
+                    if (i.used || i.word.kind != Keywords.ITEM) continue;
+                    double before = h.start - i.end;
+                    if (before >= -0.2 && before <= numAfter && (item == null || i.end > item.end)) item = i;
+                }
+                if (item != null) pair(h, item, now, out);
+            }
+        }
+        it = events.iterator();
+        while (it.hasNext()) {
+            Hit h = it.next();
+            if (h.word.kind == Keywords.ITEM && !h.used && now > h.end + numAfter + numAfterWait + 0.5) {
                 h.used = true;
                 out.add(new Result("lone", null, h, now));
             }
