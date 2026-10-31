@@ -302,6 +302,6 @@ const VB = (() => {
     return { kind: "new", name, alias: original && original.toLowerCase() !== name.toLowerCase() ? original : "", price, unit: unit || "piece" };
   }
 
-  return { parse, prepareCatalogue, command, priceCommand, phon, translitKannada, tokenize };
+  return { parse, prepareCatalogue, command, priceCommand, phon, translitKannada, tokenize, toItemUnit };
 })();
 if (typeof module !== "undefined") module.exports = VB;

@@ -76,6 +76,7 @@ td.num,th.num{text-align:right}
 .crash{border-color:var(--warn)}
 .crash h2{color:var(--warn)}
 .crash p{margin:0 0 8px;font-size:14px}
+.kwnote{font-size:12.5px;color:var(--muted);margin:4px 0 0}
 .engcheck{font:12px/1.45 var(--mono);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;white-space:pre-wrap;word-break:break-word;margin:8px 0 0}
 .crash pre{font:11px/1.4 var(--mono);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0}
 button.primary{background:var(--ink);color:#fff;border-color:var(--ink);font-weight:600}
@@ -143,6 +144,8 @@ button.primary{background:var(--ink);color:#fff;border-color:var(--ink);font-wei
           <input type="range" id="sens" min="1" max="5" step="1">
         </div>
         <div class="level"><span>Mic level</span><div class="bar"><i id="lvl"></i></div></div>
+        <label class="check" style="margin-top:8px"><input type="checkbox" id="useKw"> Keyword listening (test): listen only for numbers, units and your items</label>
+        <p class="kwnote" id="kwNote" hidden></p>
         <div class="actions" style="margin-top:8px"><button class="small" id="engBtn">Engine check (test)</button></div>
         <pre class="engcheck" id="engOut" hidden></pre>
       </div>
@@ -513,7 +516,7 @@ const VB = (() => {
     return { kind: "new", name, alias: original && original.toLowerCase() !== name.toLowerCase() ? original : "", price, unit: unit || "piece" };
   }
 
-  return { parse, prepareCatalogue, command, priceCommand, phon, translitKannada, tokenize };
+  return { parse, prepareCatalogue, command, priceCommand, phon, translitKannada, tokenize, toItemUnit };
 })();
 if (typeof module !== "undefined") module.exports = VB;
 
@@ -550,7 +553,7 @@ const UNITS = { kg: "kg", g: "g", l: "litre", ml: "ml", packet: "packet", piece:
 function prep() {
   prepared = VB.prepareCatalogue(CAT.map(c => ({ ...c, aliases: String(c.aliases || "").split(",").map(s => s.trim()).filter(Boolean) })));
 }
-const saveCat = () => { save("voicebilling-catalogue", CAT); prep(); };
+const saveCat = () => { save("voicebilling-catalogue", CAT); prep(); if (typeof sendKw === "function") sendKw(); };
 const saveBill = () => save("voicebilling-bill", BILL);
 
 /* ---------- formatting ---------- */
@@ -699,6 +702,29 @@ function applyPrice(pc) {
 }
 const unitShort = u => u === "l" ? "L" : u;
 
+// One result from keyword listening: an order (number + item), or an item heard without a number.
+let KW_STAT = "";
+function handleKw(ev) {
+  const c = CAT.find(x => String(x.id) === ev.item);
+  if (!c) return;
+  const base = { id: c.id, name: c.name, unit: c.unit, price: Number(c.price) || 0, heard: ev.words, match: 100 };
+  LOUD = typeof ev.loud === "number" && ev.loud >= 0 ? { v: ev.loud, e: "offline" } : null;
+  const after = typeof ev.delayMs === "number" ? ` · ${(ev.delayMs / 1000).toFixed(1)} s after you said it` : "";
+  if (ev.kind === "order") {
+    const conv = ev.unit && ev.unit === c.unit ? { qty: ev.n, note: "" } : VB.toItemUnit({ n: ev.n, unit: ev.unit || null }, c.unit);
+    const line = { ...base, qty: Math.round(conv.qty * 1000) / 1000, note: conv.note, qtySaid: true };
+    let msg = addLine(line);
+    saveBill(); renderBill();
+    if (ev.doubt) msg += ` · not sure: also heard “${ev.doubt}”, check it`;
+    logHeard(ev.words, msg + after + (KW_STAT ? ` · ${KW_STAT}` : "")); showHeard(ev.words, msg, !!ev.doubt);
+  } else {
+    const msg = "item without a number · tap to add";
+    logHeard(ev.words, msg); showHeard(ev.words, msg, false);
+    showSugg([{ ...base, qty: 1, note: "", qtySaid: false }]);
+  }
+  LOUD = null;
+}
+
 function showSugg(lines) {
   const box = $("sugg"); box.textContent = "";
   box.hidden = !lines.length;
@@ -823,6 +849,25 @@ const ENGINE_LABEL = NATIVE ? {
 const HAS_LOCAL = NATIVE && typeof AndroidSpeech.modelStatus === "function";
 let modelState = "missing";
 let USE_LOCAL = load("voicebilling-uselocal", true);
+// Keyword listening (test): the app searches only for numbers, units and the items' Kannada spellings.
+let KW_ON = load("voicebilling-kw", false);
+const hasKannada = s => /[\u0C80-\u0CFF]/.test(s);
+function kwItems() {
+  const items = [], missing = [];
+  CAT.forEach(c => {
+    const words = [...new Set([c.name, ...String(c.aliases || "").split(",")].map(w => w.trim()).filter(hasKannada))];
+    if (words.length) items.push({ id: String(c.id), words }); else missing.push(c.name);
+  });
+  return { items, missing };
+}
+function sendKw() {
+  if (!HAS_LOCAL) return;
+  const { items, missing } = kwItems();
+  AndroidSpeech.setKeywords(KW_ON, JSON.stringify(items));
+  const note = $("kwNote");
+  note.hidden = !KW_ON;
+  note.textContent = missing.length ? `Not heard in this mode (no Kannada spelling yet): ${missing.join(", ")}. Add a Kannada name in Items to include them.` : "All items have a Kannada spelling.";
+}
 let GAIN = load("voicebilling-gain", 1.5), SENS = load("voicebilling-sens", 3);
 const sensToThreshold = v => [0.7, 0.6, 0.5, 0.4, 0.3][v - 1] || 0.5;
 const localActive = () => HAS_LOCAL && LANG === "kn-IN" && USE_LOCAL && modelState === "ready";
@@ -901,7 +946,8 @@ const CRASH_PHASE = {
   model: "It closed while loading the offline Kannada model. Offline Kannada is switched off, so billing uses Google online for now.",
   vad: "It closed while starting the offline voice detector. Offline Kannada is switched off, so billing uses Google online for now.",
   decode: "It closed while the offline model was reading your first phrase. Offline Kannada is switched off, so billing uses Google online for now.",
-  enginecheck: "It closed during the Engine check: the two speech engines don't work together yet. Billing is not affected."
+  enginecheck: "It closed during the Engine check: the two speech engines don't work together yet. Billing is not affected.",
+  kws: "It closed while starting keyword listening. Keyword listening is switched off; normal offline listening still works."
 };
 function showCrash(ev) {
   $("crashBox").hidden = false;
@@ -909,13 +955,17 @@ function showCrash(ev) {
   const when = ev.at ? new Date(ev.at).toLocaleString() : "";
   $("crashText").textContent = [`Voice Billing ${ev.version} · ${ev.device} · ${when}`, `Step: ${ev.phase || "-"}`,
     ev.stack ? "Error:\n" + ev.stack : "", ev.log ? "Log:\n" + ev.log : "Log: (empty)"].filter(Boolean).join("\n\n");
-  if (CRASH_PHASE[ev.phase] && HAS_LOCAL) {
+  if (ev.phase === "kws") { KW_ON = false; save("voicebilling-kw", false); $("useKw").checked = false; sendKw(); }
+  else if (["model", "vad", "decode"].includes(ev.phase) && HAS_LOCAL) {
     USE_LOCAL = false; save("voicebilling-uselocal", false); AndroidSpeech.setEngine(false);
     $("useLocal").checked = false; renderOffline();
   }
 }
 window.onNativeSpeech = ev => {
   if (ev.type === "crash") { showCrash(ev); return; }
+  if (ev.type === "kw") { handleKw(ev); return; }
+  if (ev.type === "kwready") { $("status").textContent = `Keyword listening: looking for ${ev.words} words.`; return; }
+  if (ev.type === "kwstat") { KW_STAT = `each check: model ${ev.modelMs} ms + search ${ev.searchMs} ms`; return; }
   if (ev.type === "enginecheck") { $("engOut").hidden = false; $("engOut").textContent = ev.text; $("engBtn").disabled = !ev.done; return; }
   if (ev.type === "model") { renderOffline(ev); return; }
   if (ev.type === "loading") { $("status").textContent = "Loading the Kannada model…"; return; }
@@ -1016,6 +1066,8 @@ $("crashHide").onclick = () => { $("crashBox").hidden = true; };
 $("crashCopy").onclick = () => { const t = $("crashText").textContent; if (NATIVE) AndroidSpeech.copy(t); else navigator.clipboard?.writeText(t).catch(() => {}); toast("Report copied"); };
 if (HAS_LOCAL) {
   $("useLocal").checked = USE_LOCAL; AndroidSpeech.setEngine(USE_LOCAL);
+  $("useKw").checked = KW_ON; sendKw();
+  $("useKw").onchange = () => { KW_ON = $("useKw").checked; save("voicebilling-kw", KW_ON); sendKw(); if (listening && localActive()) { stopListening(); startListening(); } };
   $("useLocal").onchange = () => { USE_LOCAL = $("useLocal").checked; save("voicebilling-uselocal", USE_LOCAL); AndroidSpeech.setEngine(USE_LOCAL); if (listening) { stopListening(); startListening(); } showEngine(); };
   const g = $("gain"), sv = $("sens");
   g.value = GAIN; sv.value = SENS;

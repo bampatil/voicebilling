@@ -32,6 +32,9 @@ class MainActivity : Activity() {
     private lateinit var speech: Speech
     private lateinit var store: ModelStore
     private lateinit var local: LocalSpeech
+    private lateinit var kw: KeywordListener
+    private var kwOn = false             // keyword listening (test mode), set by the page
+    private var kwItems = "[]"
     private var useLocal = true   // offline Kannada model when downloaded; the page can switch to Google
     private var crashReport: JSONObject? = null
     private var tts: TextToSpeech? = null
@@ -67,6 +70,7 @@ class MainActivity : Activity() {
         speech = Speech(this) { send(it) }
         store = ModelStore(this) { send(it) }
         local = LocalSpeech(this, store) { send(it) }
+        kw = KeywordListener(this, store) { send(it) }
         web.addJavascriptInterface(Bridge(), "AndroidSpeech")
         web.loadUrl("file:///android_asset/index.html")
 
@@ -95,7 +99,7 @@ class MainActivity : Activity() {
         }
 
         @JavascriptInterface
-        fun stop() { main.post { lastStart = null; speech.stop(); local.stop() } }
+        fun stop() { main.post { lastStart = null; speech.stop(); local.stop(); kw.stop() } }
 
         // Offline Kannada model
         @JavascriptInterface
@@ -105,10 +109,13 @@ class MainActivity : Activity() {
         fun downloadModel() { main.post { store.download() } }
 
         @JavascriptInterface
-        fun deleteModel() { main.post { local.stop(); store.delete() } }
+        fun deleteModel() { main.post { local.stop(); kw.stop(); store.delete() } }
 
         @JavascriptInterface
         fun engineCheck() { EngineCheck.run(this@MainActivity, store) { send(it) } }
+
+        @JavascriptInterface
+        fun setKeywords(on: Boolean, itemsJson: String) { main.post { kwOn = on; kwItems = itemsJson } }
 
         @JavascriptInterface
         fun setEngine(offline: Boolean) { main.post { useLocal = offline } }
@@ -116,6 +123,7 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun setMic(gain: Float, sensitivity: Float) {
             local.gain = gain.coerceIn(0.5f, 6f)
+            kw.gain = gain.coerceIn(0.5f, 6f)
             local.sensitivity = sensitivity.coerceIn(0.2f, 0.8f)
         }
 
@@ -161,9 +169,10 @@ class MainActivity : Activity() {
     /** Kannada with the downloaded model → fully offline; anything else → the phone's recognizer (Google). */
     private fun begin(lang: String, names: List<String>) {
         if (lang == "kn-IN" && useLocal && store.isReady()) {
-            local.start()
+            if (kwOn) { local.stop(); kw.start(kwItems) } else { kw.stop(); local.start() }
         } else {
             local.stop()
+            kw.stop()
             speech.start(lang, names)
         }
     }
@@ -186,6 +195,7 @@ class MainActivity : Activity() {
         resumeListening = lastStart != null && pending == null
         speech.stop()
         local.stop()
+        kw.stop()
     }
 
     override fun onResume() {
@@ -200,6 +210,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         speech.destroy()
         local.destroy()
+        kw.destroy()
         tts?.shutdown()
         web.destroy()
         super.onDestroy()
