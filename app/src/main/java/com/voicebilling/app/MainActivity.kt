@@ -124,6 +124,7 @@ class MainActivity : Activity() {
         fun setMic(gain: Float, sensitivity: Float) {
             local.gain = gain.coerceIn(0.5f, 6f)
             kw.gain = gain.coerceIn(0.5f, 6f)
+            kw.sensitivity = sensitivity.coerceIn(0.2f, 0.8f)
             local.sensitivity = sensitivity.coerceIn(0.2f, 0.8f)
         }
 

@@ -964,6 +964,7 @@ function showCrash(ev) {
 window.onNativeSpeech = ev => {
   if (ev.type === "crash") { showCrash(ev); return; }
   if (ev.type === "kw") { handleKw(ev); return; }
+  if (ev.type === "kwheard") { if (listening) $("status").textContent = ev.text ? `Hearing: “${ev.text}”` : "Listening for numbers and items…"; return; }
   if (ev.type === "kwready") { $("status").textContent = `Keyword listening: looking for ${ev.words} words.`; return; }
   if (ev.type === "kwstat") { KW_STAT = `each check: model ${ev.modelMs} ms + search ${ev.searchMs} ms`; return; }
   if (ev.type === "enginecheck") { $("engOut").hidden = false; $("engOut").textContent = ev.text; $("engBtn").disabled = !ev.done; return; }
@@ -981,6 +982,7 @@ window.onNativeSpeech = ev => {
   else if (ev.type === "error") {
     $("status").textContent = (NATIVE_ERRORS[ev.code] || `Speech problem (${ev.code}).`) + (ev.fatal ? "" : " Still listening…");
     if (ev.fatal) { listening = false; micUi(false); }
+    if (ev.detail && ev.code !== "model-failed" && ev.code !== "vad-failed") logHeard(`(${ev.code})`, ev.detail);
     if (ev.code === "model-failed" || ev.code === "vad-failed") { USE_LOCAL = false; $("useLocal").checked = false; AndroidSpeech.setEngine(false); save("voicebilling-uselocal", false); renderOffline(); if (ev.detail) logHeard("(offline model)", ev.detail); }
   }
   else if (ev.type === "offline") { if (ev.lang === LANG) { offlineState = ev.state; save(OFF_KEY(), offlineState); showEngine(); } }
