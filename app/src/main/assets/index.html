@@ -964,7 +964,15 @@ function showCrash(ev) {
 window.onNativeSpeech = ev => {
   if (ev.type === "crash") { showCrash(ev); return; }
   if (ev.type === "kw") { handleKw(ev); return; }
-  if (ev.type === "kwheard") { if (listening) $("status").textContent = ev.text ? `Hearing: “${ev.text}”` : "Listening for numbers and items…"; return; }
+  // Keyword listening heartbeat: shows which part is working, so a "stuck" screen can be explained.
+  if (ev.type === "kwheard") { if (listening) $("status").textContent = (ev.text ? `Hearing: “${ev.text}”` : "Listening for numbers and items…") + ` · check ${ev.n}`; return; }
+  if (ev.type === "kwidle") { if (listening) $("status").textContent = "Waiting for speech… (nobody speaking, or too quiet: watch the Mic level bar)"; return; }
+  if (ev.type === "kwmic") {
+    const m = { silent: "The phone is giving this app silence: another app may be using the mic (Google, WhatsApp, a call). Close it, or tap the mic off and on.",
+                error: `The phone took the mic away (code ${ev.code}). Trying to get it back…`, back: "Mic sound is back.",
+                stalled: "No sound has come from the mic for 2 seconds. Tap the mic off and on." }[ev.state] || "";
+    $("status").textContent = m; logHeard("(mic)", m); return;
+  }
   if (ev.type === "kwready") { $("status").textContent = `Keyword listening: looking for ${ev.words} words.`; return; }
   if (ev.type === "kwstat") { KW_STAT = `each check: model ${ev.modelMs} ms + search ${ev.searchMs} ms`; return; }
   if (ev.type === "enginecheck") { $("engOut").hidden = false; $("engOut").textContent = ev.text; $("engBtn").disabled = !ev.done; return; }

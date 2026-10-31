@@ -48,6 +48,7 @@ class KeywordListener(private val act: Activity, private val store: ModelStore, 
     @Volatile private var running = false
     @Volatile var gain = 1.5f
     @Volatile var sensitivity = 0.5f              // voice detector threshold, from "Pick up softer voices"
+    @Volatile private var micRestarts = 0
     @Volatile private var gen = 0                 // each start gets a new number; old threads stop when it changes
     private var recordThread: Thread? = null
     private var workThread: Thread? = null
@@ -65,6 +66,7 @@ class KeywordListener(private val act: Activity, private val store: ModelStore, 
         if (running) return
         running = true
         val g = ++gen
+        micRestarts = 0
         synchronized(ring) { total = 0; lastSpeech = -1 }
         emit(JSONObject().put("type", "state").put("listening", true).put("offline", true).put("engine", "keywords"))
         workThread = Thread({ work(itemsJson, g) }, "kws").also { it.start() }
@@ -128,13 +130,29 @@ class KeywordListener(private val act: Activity, private val store: ModelStore, 
         recordThread = Thread({
             val chunk = ShortArray(512)
             val f = FloatArray(512)
+            var zeroSamples = 0
+            var silentReported = false
             var lastLevel = 0L
             try {
                 rec.startRecording()
                 emit(JSONObject().put("type", "ready").put("offline", true))
                 while (alive(g)) {
                     val n = rec.read(chunk, 0, chunk.size)
-                    if (n <= 0) continue
+                    if (n < 0) {   // the phone took the mic away (error code); try to get it back
+                        emit(JSONObject().put("type", "kwmic").put("state", "error").put("code", n))
+                        break
+                    }
+                    if (n == 0) continue
+                    // All-zero sound for 2 s = Android is giving this app silence (another app is using the mic).
+                    var allZero = true
+                    for (i in 0 until n) if (chunk[i].toInt() != 0) { allZero = false; break }
+                    if (allZero) {
+                        zeroSamples += n
+                        if (zeroSamples >= 2 * rate && !silentReported) { silentReported = true; emit(JSONObject().put("type", "kwmic").put("state", "silent")) }
+                    } else {
+                        if (silentReported) emit(JSONObject().put("type", "kwmic").put("state", "back"))
+                        zeroSamples = 0; silentReported = false
+                    }
                     var sum = 0.0
                     val gn = gain
                     synchronized(ring) {
@@ -166,6 +184,11 @@ class KeywordListener(private val act: Activity, private val store: ModelStore, 
                 try { rec.stop() } catch (e: Exception) { }
                 rec.release()
                 vad?.release()
+                if (alive(g) && micRestarts < 5) {      // still meant to be listening: open the mic again
+                    micRestarts++
+                    Thread.sleep(500)
+                    act.runOnUiThread { if (alive(g)) startRecording(g) }
+                }
             }
         }, "kws-mic").also { it.start() }
     }
@@ -176,12 +199,26 @@ class KeywordListener(private val act: Activity, private val store: ModelStore, 
         val e = env ?: return
         var next = win.toLong()
         var runs = 0; var modelMs = 0L; var searchMs = 0L; var firstStat = true
-        var lastText = ""
+        var checks = 0L
+        var seenTotal = -1L; var seenAt = SystemClock.elapsedRealtime(); var stallReported = false
+        var lastIdle = 0L
         while (alive(g)) {
-            if (total < next) { Thread.sleep(20); continue }
+            if (total < next) {
+                Thread.sleep(20)
+                // The mic stopped delivering sound altogether (not even silence): say so once.
+                if (total != seenTotal) { seenTotal = total; seenAt = SystemClock.elapsedRealtime(); stallReported = false }
+                else if (!stallReported && SystemClock.elapsedRealtime() - seenAt > 2000) {
+                    stallReported = true
+                    emit(JSONObject().put("type", "kwmic").put("state", "stalled"))
+                }
+                continue
+            }
             val end = total
             next = max(next + hop, end - hop / 2)          // if the phone falls behind, skip ahead instead of piling up
-            if (lastSpeech < end - win) continue          // nobody spoke in the last 3 s
+            if (lastSpeech < end - win) {                 // nobody spoke in the last 3 s: don't run the model
+                if (end - lastIdle >= rate) { lastIdle = end; emit(JSONObject().put("type", "kwidle")) }
+                continue
+            }
             val start = end - win
             val clip = FloatArray(win)
             synchronized(ring) {
@@ -204,8 +241,8 @@ class KeywordListener(private val act: Activity, private val store: ModelStore, 
                 val t2 = SystemClock.elapsedRealtime()
                 modelMs += t1 - t0; searchMs += t2 - t1; runs++
                 // What the model wrote down for this stretch (the model's own best guess), so the screen shows it is listening.
-                val text = greedy(lp, spotter!!)
-                if (text != lastText) { lastText = text; emit(JSONObject().put("type", "kwheard").put("text", text)) }
+                checks++
+                emit(JSONObject().put("type", "kwheard").put("text", greedy(lp, spotter!!)).put("n", checks))
                 val nowSec = total / rate.toDouble()
                 for (res in results) {
                     val o = JSONObject().put("type", "kw").put("kind", res.kind).put("item", res.item.word.key)
