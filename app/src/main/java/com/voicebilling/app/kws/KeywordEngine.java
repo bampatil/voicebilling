@@ -35,21 +35,26 @@ public final class KeywordEngine {
     }
 
     public static final class Result {
-        public final String kind;      // "order" or "lone"
+        public final String kind;      // "order", "lone" (item, no number) or "lonenum" (number, no item found)
         public final Hit num, item;
         public final double at;        // when it was decided (audio time)
         Result(String kind, Hit num, Hit item, double at) { this.kind = kind; this.num = num; this.item = item; this.at = at; }
         /** Another reading was almost as likely: the number or the item may be wrong. */
         public String doubt() {
             if (num != null && num.rival != null) return num.rival;
-            return item.rival;
+            return item == null ? null : item.rival;
         }
         public double qty() { return num == null ? 0 : num.word.num; }
         public String unit() { return num != null && num.unit != null ? num.unit.word.key : null; }
-        public double start() { return num == null ? item.start : Math.min(num.start, item.start); }
-        public double end() { return num == null ? item.end : Math.max(num.end, Math.max(item.end, num.unit != null ? num.unit.end : 0)); }
+        public double start() { return num == null ? item.start : item == null ? num.start : Math.min(num.start, item.start); }
+        public double end() {
+            double u = num != null && num.unit != null ? num.unit.end : 0;
+            return num == null ? item.end : item == null ? Math.max(num.end, u) : Math.max(num.end, Math.max(item.end, u));
+        }
+        public String itemKey() { return item == null ? "" : item.word.key; }
         public String words() {
             if (num == null) return item.word.text;
+            if (item == null) return num.text();
             return num.start <= item.start ? num.text() + " " + item.word.text : item.word.text + " " + num.text();
         }
     }
@@ -60,13 +65,16 @@ public final class KeywordEngine {
 
     public KeywordEngine(Spotter spotter) { this.spotter = spotter; }
 
-    public void setWords(List<Keywords.Word> list) {
+    public void setWords(List<Keywords.Word> list) { setWords(list, false); }
+
+    /** keepHeard: keep what was already heard (used when the item list changes while listening). */
+    public void setWords(List<Keywords.Word> list, boolean keepHeard) {
         words.clear();
         for (Keywords.Word w : list) {
             w.spellings = spotter.spellings(w.text, 20);
             if (w.spellings.length > 0) words.add(w);
         }
-        events.clear();
+        if (!keepHeard) { events.clear(); lastLone = null; }
     }
 
     public int wordCount() { return words.size(); }
@@ -140,7 +148,7 @@ public final class KeywordEngine {
         List<Result> uniq = new ArrayList<>();
         for (Result r : out) {
             boolean dup = false;
-            for (Result u : uniq) if (u.kind.equals(r.kind) && u.item.word.key.equals(r.item.word.key) && u.qty() == r.qty()
+            for (Result u : uniq) if (u.kind.equals(r.kind) && u.itemKey().equals(r.itemKey()) && u.qty() == r.qty()
                     && java.util.Objects.equals(u.unit(), r.unit())) { dup = true; break; }
             if (!dup) uniq.add(r);
         }
@@ -201,6 +209,8 @@ public final class KeywordEngine {
     /** How long a number after an item waits for a following item before it is given to the item before it. */
     public double numAfterWait = 1.5;
 
+    private Hit lastLone;
+
     private void expire(double now, List<Result> out) {
         Iterator<Hit> it = events.iterator();
         while (it.hasNext()) {
@@ -214,6 +224,24 @@ public final class KeywordEngine {
                     if (before >= -0.2 && before <= numAfter && (item == null || i.end > item.end)) item = i;
                 }
                 if (item != null) pair(h, item, now, out);
+            }
+            // A number no item claimed: the item was probably said but not recognised ("ಮೂರು ನಾಗಿ").
+            // Reported once, so the screen can offer the closest items and learn the word.
+            if (h.word.kind == Keywords.NUM && !h.used && now > h.expires + 0.2) {
+                h.used = true;
+                // Not if it is explained another way: a stray piece of an item word, a known item right after it
+                // (self-correction, "ನಾಲ್ಕು ಎಗ್ಗು ನಾಲ್ಕು ಮೊಟ್ಟೆ"), or another reading of a number that made an order.
+                boolean explained = false;
+                for (Hit x : events) {
+                    if (x == h) continue;
+                    // part of an item's own sound (ಟು inside ಹಿಟ್ಟು), or an item follows straight away
+                    if (x.word.kind == Keywords.ITEM && x.start < h.end && h.start < x.end) { explained = true; break; }
+                    if (x.word.kind == Keywords.ITEM && x.start >= h.end - 0.3 && x.start <= h.end + 1.0) { explained = true; break; }
+                    if (x.word.kind == Keywords.NUM && x.partner != null && x.start < h.end + 0.3 && h.start < x.end + 0.3) { explained = true; break; }
+                }
+                // the same number read twice a moment apart is reported once
+                if (!explained && lastLone != null && lastLone.word.num == h.word.num && h.start - lastLone.end < 0.8) explained = true;
+                if (!explained) { out.add(new Result("lonenum", h, null, now)); lastLone = h; }
             }
         }
         it = events.iterator();

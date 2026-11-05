@@ -153,7 +153,7 @@ class MainActivity : Activity() {
         fun engineCheck() { EngineCheck.run(this@MainActivity, store) { send(it) } }
 
         @JavascriptInterface
-        fun setKeywords(on: Boolean, itemsJson: String) { main.post { kwOn = on; kwItems = itemsJson } }
+        fun setKeywords(on: Boolean, itemsJson: String) { main.post { kwOn = on; kwItems = itemsJson; kw.updateItems(itemsJson) } }
 
         @JavascriptInterface
         fun setEngine(offline: Boolean) { main.post { useLocal = offline } }

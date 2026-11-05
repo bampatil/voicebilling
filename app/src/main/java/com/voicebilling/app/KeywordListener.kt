@@ -61,6 +61,53 @@ class KeywordListener(private val act: Activity, private val store: ModelStore, 
 
     fun isRunning() = running
 
+    @Volatile private var newItems: String? = null
+    /** The item list changed while listening (for example a word was just taught): use it from the next check. */
+    fun updateItems(itemsJson: String) { if (running) newItems = itemsJson }
+
+    private fun buildWords(itemsJson: String): ArrayList<Keywords.Word> {
+        val words = ArrayList<Keywords.Word>(Keywords.numbers())
+        words.addAll(Keywords.units())
+        val items = JSONArray(itemsJson)
+        for (i in 0 until items.length()) {
+            val o = items.getJSONObject(i)
+            val ws = o.getJSONArray("words")
+            for (j in 0 until ws.length()) words.add(Keywords.item(o.getString("id"), ws.getString(j)))
+        }
+        return words
+    }
+
+    /** Words the model wrote down in recent checks, with their times (for "number heard, which item?"). */
+    private class Heard(val text: String, val start: Double, val end: Double)
+    private val recentWords = java.util.ArrayDeque<Pair<Double, List<Heard>>>()
+
+    private fun wordsAfter(t: Double, span: Double): String {
+        // the check that started closest before t covers the words just after it best
+        val w = recentWords.filter { it.first <= t + 0.05 }.maxByOrNull { it.first } ?: recentWords.firstOrNull() ?: return ""
+        return w.second.filter { it.start >= t - 0.05 && it.start <= t + span }.joinToString(" ") { it.text }
+    }
+
+    private fun greedyWords(lp: Array<FloatArray>, sp: Spotter, windowStart: Double): List<Heard> {
+        val out = ArrayList<Heard>()
+        val sb = StringBuilder(); var ws = -1; var we = -1
+        var prev = -1
+        fun flush() { val s = sb.toString().trim(); if (s.isNotEmpty()) out.add(Heard(s, windowStart + ws * 0.04, windowStart + (we + 1) * 0.04)); sb.setLength(0); ws = -1 }
+        for ((t, row) in lp.withIndex()) {
+            var best = 0
+            for (i in row.indices) if (row[i] > row[best]) best = i
+            if (best != prev && best != sp.blank) {
+                val tok = sp.token(best)
+                if (tok.startsWith("▁")) flush()
+                if (ws < 0) ws = t
+                we = t
+                sb.append(tok.replace("▁", ""))
+            }
+            prev = best
+        }
+        flush()
+        return out
+    }
+
     /** itemsJson: [{"id":"3","words":["ಸಕ್ಕರೆ","ಸಕ್ರಿ"]}, …] — Kannada spellings only. */
     fun start(itemsJson: String) {
         if (running) return
@@ -85,14 +132,7 @@ class KeywordListener(private val act: Activity, private val store: ModelStore, 
                 engine = KeywordEngine(spotter)
                 CrashGuard.clear(act)
             }
-            val words = ArrayList<Keywords.Word>(Keywords.numbers())
-            words.addAll(Keywords.units())
-            val items = JSONArray(itemsJson)
-            for (i in 0 until items.length()) {
-                val o = items.getJSONObject(i)
-                val ws = o.getJSONArray("words")
-                for (j in 0 until ws.length()) words.add(Keywords.item(o.getString("id"), ws.getString(j)))
-            }
+            val words = buildWords(itemsJson)
             val t0 = SystemClock.elapsedRealtime()
             engine!!.setWords(words)
             emit(JSONObject().put("type", "kwready").put("words", engine!!.wordCount()).put("ms", SystemClock.elapsedRealtime() - t0))
@@ -199,7 +239,7 @@ class KeywordListener(private val act: Activity, private val store: ModelStore, 
         val eng = engine ?: return
         val sess = session ?: return
         val e = env ?: return
-        var next = win.toLong()
+        var next = (rate * 3 / 2).toLong()                // first check after 1.5 s, then every 0.5 s
         var runs = 0; var modelMs = 0L; var searchMs = 0L; var firstStat = true
         var checks = 0L
         var seenTotal = -1L; var seenAt = SystemClock.elapsedRealtime(); var stallReported = false
@@ -217,14 +257,16 @@ class KeywordListener(private val act: Activity, private val store: ModelStore, 
             }
             val end = total
             next = max(next + hop, end - hop / 2)          // if the phone falls behind, skip ahead instead of piling up
-            if (lastSpeech < end - win) {                 // nobody spoke in the last 3 s: don't run the model
+            newItems?.let { j -> newItems = null; try { eng.setWords(buildWords(j), true) } catch (e: Exception) { } }
+            val len = min(win.toLong(), end).toInt()
+            if (lastSpeech < end - len) {                 // nobody spoke in the last 3 s: don't run the model
                 if (end - lastIdle >= rate) { lastIdle = end; emit(JSONObject().put("type", "kwidle")) }
                 continue
             }
-            val start = end - win
-            val clip = FloatArray(win)
+            val start = end - len
+            val clip = FloatArray(len)
             synchronized(ring) {
-                for (i in 0 until win) clip[i] = min(1f, max(-1f, ring[((start + i) % ringSize).toInt()] * gain))
+                for (i in 0 until len) clip[i] = min(1f, max(-1f, ring[((start + i) % ringSize).toInt()] * gain))
             }
             try {
                 val t0 = SystemClock.elapsedRealtime()
@@ -244,7 +286,10 @@ class KeywordListener(private val act: Activity, private val store: ModelStore, 
                 modelMs += t1 - t0; searchMs += t2 - t1; runs++
                 // What the model wrote down for this stretch (the model's own best guess), so the screen shows it is listening.
                 checks++
-                val heardText = greedy(lp, spotter!!)
+                val heardWords = greedyWords(lp, spotter!!, start / rate.toDouble())
+                recentWords.addLast(Pair(start / rate.toDouble(), heardWords))
+                while (recentWords.size > 8) recentWords.removeFirst()
+                val heardText = heardWords.joinToString(" ") { it.text }
                 emit(JSONObject().put("type", "kwheard").put("text", heardText).put("n", checks))
                 if (DebugRecorder.active) {
                     DebugRecorder.event("CHECK", String.format(java.util.Locale.US, "%.1f-%.1fs “%s”  (model %d ms, search %d ms)",
@@ -256,17 +301,25 @@ class KeywordListener(private val act: Activity, private val store: ModelStore, 
                 }
                 val nowSec = total / rate.toDouble()
                 for (res in results) {
-                    val o = JSONObject().put("type", "kw").put("kind", res.kind).put("item", res.item.word.key)
+                    val o = JSONObject().put("type", "kw").put("kind", res.kind).put("item", res.itemKey())
                         .put("words", res.words()).put("loud", loudness(res.start(), res.end()))
                         .put("delayMs", ((nowSec - res.end()) * 1000).toInt())
+                    if (res.kind == "lonenum") {
+                        o.put("n", res.qty()).put("after", wordsAfter(res.end(), 2.5))
+                        res.unit()?.let { o.put("unit", it) }
+                    }
                     if (res.kind == "order") {
                         o.put("n", res.qty())
                         res.unit()?.let { o.put("unit", it) }
                         res.doubt()?.let { o.put("doubt", it) }
                     }
                     emit(o)
-                    if (DebugRecorder.active) DebugRecorder.event(if (res.kind == "order") "ORDER" else "LONE",
-                        (if (res.kind == "order") "${fmt(res.qty())}${res.unit()?.let { " $it" } ?: ""} × item ${res.item.word.key}" else "item ${res.item.word.key} with no number") +
+                    if (DebugRecorder.active) DebugRecorder.event(when (res.kind) { "order" -> "ORDER"; "lonenum" -> "NOITEM"; else -> "LONE" },
+                        (when (res.kind) {
+                            "order" -> "${fmt(res.qty())}${res.unit()?.let { " $it" } ?: ""} × item ${res.itemKey()}"
+                            "lonenum" -> "${fmt(res.qty())}${res.unit()?.let { " $it" } ?: ""} but no known item; words after it: “${o.optString("after")}”"
+                            else -> "item ${res.itemKey()} with no number"
+                        }) +
                         String.format(java.util.Locale.US, " · heard “%s” @%.2f-%.2fs · decided %.1f s after · loudness %s%s",
                             res.words(), res.start(), res.end(), (nowSec - res.end()), o.opt("loud"), res.doubt()?.let { " · NOT SURE, also heard $it" } ?: ""))
                 }

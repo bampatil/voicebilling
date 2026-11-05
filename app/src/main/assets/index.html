@@ -725,7 +725,51 @@ const unitShort = u => u === "l" ? "L" : u;
 
 // One result from keyword listening: an order (number + item), or an item heard without a number.
 let KW_STAT = "";
+// Words said after a number that matched no item ("ಮೂರು ನಾಗಿ"): keep the first one or two words that aren't
+// numbers or units, as the probable item name.
+const JOINERS = new Set(["ಆಮೇಲೆ", "ಆದಮೇಲೆ", "ಆದ್ಮೇಲೆ", "ಆಮೇಲ", "ಮತ್ತೆ", "ಮತ್ತು", "ಇನ್ನು", "ಇನ್ನೊಂದು", "ಆಮೇಲೆ", "and"]);
+function itemWordsFrom(after) {
+  const out = [];
+  for (const w of String(after || "").split(/\s+/).filter(Boolean)) {
+    const t = (VB.tokenize(w)[0] || {}).type;
+    if (["num", "frac", "unit"].includes(t) || JOINERS.has(w)) { if (out.length) break; else continue; }
+    if (t === "fill" || t === "kw") { if (out.length) break; else continue; }
+    // one word, plus a very short second one ("ಪಾರ್ಲೆ ಜಿ")
+    if (out.length === 1 && [...w].length > 2) break;
+    out.push(w);
+    if (out.length === 2) break;
+  }
+  return out.join(" ");
+}
+function lev(a, b) {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++)
+    d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[a.length][b.length];
+}
+// Items whose names sound closest to what was heard (by the same sound key the parser uses), best first.
+function nearestItems(text, k = 3) {
+  const key = VB.phon(text); if (!key) return [];
+  return CAT.map(c => {
+    const names = [c.name, ...String(c.aliases || "").split(",")].map(x => x.trim()).filter(Boolean);
+    const sim = Math.max(...names.map(n => { const nk = VB.phon(n); return nk ? 1 - lev(key, nk) / Math.max(key.length, nk.length) : 0; }));
+    return { c, sim };
+  }).filter(x => x.sim >= 0.45).sort((a, b) => b.sim - a.sim).slice(0, k);
+}
+// Teach once: the heard word becomes another name of the item, so next time it is recognised directly.
+function teach(c, word) {
+  if (!word || !hasKannada(word)) return;
+  const names = String(c.aliases || "").split(",").map(x => x.trim()).filter(Boolean);
+  if (names.includes(word) || c.name === word) return;
+  c.aliases = [...names, word].join(", ");
+  saveCat(); renderCat();
+  dbg("TEACH", `“${word}” = ${c.name}`);
+  toast(`Learned: “${word}” means ${c.name}`);
+}
+
 function handleKw(ev) {
+  if (ev.kind === "lonenum") { handleLoneNumber(ev); return; }
   const c = CAT.find(x => String(x.id) === ev.item);
   if (!c) return;
   const base = { id: c.id, name: c.name, unit: c.unit, price: Number(c.price) || 0, heard: ev.words, match: 100 };
@@ -738,6 +782,11 @@ function handleKw(ev) {
     saveBill(); renderBill();
     if (ev.doubt) msg += ` · not sure: also heard “${ev.doubt}”, check it`;
     logHeard(ev.words, msg + after + (KW_STAT ? ` · ${KW_STAT}` : "")); showHeard(ev.words, msg, !!ev.doubt);
+  } else if (!NEED_QTY) {
+    // "Add only when a quantity is said" is off: an item on its own is added as 1
+    const msg = addLine({ ...base, qty: 1, note: "", qtySaid: false }) + " (no number said, so 1)";
+    saveBill(); renderBill();
+    logHeard(ev.words, msg + after); showHeard(ev.words, msg, false);
   } else {
     const msg = "item without a number · tap to add";
     logHeard(ev.words, msg); showHeard(ev.words, msg, false);
@@ -746,14 +795,40 @@ function handleKw(ev) {
   LOUD = null;
 }
 
+// A number was heard but no item from the list followed it. Guess from the words after it:
+// the closest items are offered (never added on a guess); tapping one adds it AND teaches the app that word,
+// so next time it is caught directly.
+function handleLoneNumber(ev) {
+  const said = itemWordsFrom(ev.after);
+  const qtyText = `${ev.n}${ev.unit ? " " + ev.unit : ""}`;
+  if (!said) { logHeard(ev.words, `number ${qtyText} heard, but no item after it`); return; }
+  const lineFor = (c, sure) => {
+    const conv = ev.unit && ev.unit === c.unit ? { qty: ev.n, note: "" } : VB.toItemUnit({ n: ev.n, unit: ev.unit || null }, c.unit);
+    return { id: c.id, name: c.name, unit: c.unit, price: Number(c.price) || 0, heard: `${ev.words} ${said}`, match: sure,
+             qty: Math.round(conv.qty * 1000) / 1000, note: conv.note, qtySaid: true };
+  };
+  const p = VB.parse(said, prepared).lines[0];   // the full-sentence matcher's best guess goes first
+  const near = nearestItems(said);
+  if (p && !near.some(x => x.c.id === p.id)) { const c = CAT.find(x => x.id === p.id); if (c) near.unshift({ c, sim: p.match / 100 }); }
+  if (!near.length) { logHeard(`${ev.words} ${said}`, `number ${qtyText} heard, “${said}” is not on the item list · add it in Items`); return; }
+  const msg = `heard “${said}”, not on the list · tap the right item to add it and teach the app`;
+  logHeard(`${ev.words} ${said}`, msg); showHeard(`${ev.words} ${said}`, msg, true);
+  showSugg(near.slice(0, 3).map(x => ({ ...lineFor(x.c, Math.round(x.sim * 100)), label: `${qtyLabel(lineFor(x.c, 0).qty, x.c.unit)} ${x.c.name}?`, teach: said })));
+}
+
 function showSugg(lines) {
   const box = $("sugg"); box.textContent = "";
   box.hidden = !lines.length;
   if (!lines.length) return;
   box.append("Add?");
   lines.forEach(l => {
-    const b = document.createElement("button"); b.textContent = `+ ${l.name}`;
-    b.onclick = () => { const m = addLine(l); BILL_SRC = "tap"; saveBill(); BILL_SRC = "typed"; renderBill(); toast(m); b.remove(); if (!box.querySelector("button")) box.hidden = true; };
+    const b = document.createElement("button"); b.textContent = `+ ${l.label || l.name}`;
+    b.onclick = () => {
+      const { label, teach: word, ...line } = l;
+      const m = addLine(line); BILL_SRC = "tap"; saveBill(); BILL_SRC = "typed"; renderBill(); toast(m);
+      if (word) { const c = CAT.find(x => x.id === line.id); if (c) teach(c, word); box.textContent = ""; box.hidden = true; return; }   // the other guesses were wrong
+      b.remove(); if (!box.querySelector("button")) box.hidden = true;
+    };
     box.append(b);
   });
 }
