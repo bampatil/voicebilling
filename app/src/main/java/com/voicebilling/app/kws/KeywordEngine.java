@@ -55,6 +55,8 @@ public final class KeywordEngine {
     }
 
     private final List<Hit> events = new ArrayList<>();
+    /** Everything the last window found, for the test log. */
+    public List<Hit> lastHits = new ArrayList<>();
 
     public KeywordEngine(Spotter spotter) { this.spotter = spotter; }
 
@@ -108,7 +110,8 @@ public final class KeywordEngine {
      */
     public List<Result> process(float[][] lp, double windowStart, double windowEnd) {
         List<Result> out = new ArrayList<>();
-        for (Hit h : detect(lp, windowStart)) {
+        lastHits = detect(lp, windowStart);
+        for (Hit h : lastHits) {
             if (h.end > windowEnd - 0.15) continue;          // touching the window's end: may be cut off, wait for the next window
             Hit same = null;
             for (Hit x : events) {

@@ -35,6 +35,8 @@ class MainActivity : Activity() {
     private lateinit var kw: KeywordListener
     private var kwOn = false             // keyword listening (test mode), set by the page
     private var kwItems = "[]"
+    private var micGain = 1.5f
+    private var micSens = 0.5f
     private var useLocal = true   // offline Kannada model when downloaded; the page can switch to Google
     private var crashReport: JSONObject? = null
     private var tts: TextToSpeech? = null
@@ -99,7 +101,43 @@ class MainActivity : Activity() {
         }
 
         @JavascriptInterface
-        fun stop() { main.post { lastStart = null; speech.stop(); local.stop(); kw.stop() } }
+        fun stop() { main.post { lastStart = null; speech.stop(); local.stop(); kw.stop(); DebugRecorder.end() } }
+
+        // Test recorder (see DebugRecorder)
+        @JavascriptInterface
+        fun setDebug(on: Boolean) { DebugRecorder.enabled = on; if (!on) DebugRecorder.end() }
+
+        @JavascriptInterface
+        fun debugEvent(kind: String, text: String) { DebugRecorder.event(kind, text) }
+
+        @JavascriptInterface
+        fun copyDebugLog() {
+            val t = DebugRecorder.logText(this@MainActivity)
+            main.post {
+                if (t == null) { send(JSONObject().put("type", "toast").put("text", "No test recorded yet")); return@post }
+                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("Voice Billing test log", t))
+                send(JSONObject().put("type", "toast").put("text", "Test log copied"))
+            }
+        }
+
+        @JavascriptInterface
+        fun shareDebug() {
+            main.post { speech.stop(); local.stop(); kw.stop(); lastStart = null }
+            Thread {
+                val zip = try { DebugRecorder.zipLatest(this@MainActivity) } catch (e: Exception) { null }
+                main.post {
+                    if (zip == null) { send(JSONObject().put("type", "toast").put("text", "No test recorded yet")); return@post }
+                    val uri = android.net.Uri.parse("content://${DebugFileProvider.AUTHORITY}/${zip.name}")
+                    val i = android.content.Intent(android.content.Intent.ACTION_SEND).setType("application/zip")
+                        .putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                        .putExtra(android.content.Intent.EXTRA_SUBJECT, "Voice Billing test ${zip.nameWithoutExtension}")
+                        .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    i.clipData = ClipData.newRawUri(zip.name, uri)
+                    startActivity(android.content.Intent.createChooser(i, "Share test (sound + log)"))
+                }
+            }.start()
+        }
 
         // Offline Kannada model
         @JavascriptInterface
@@ -123,6 +161,7 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun setMic(gain: Float, sensitivity: Float) {
             local.gain = gain.coerceIn(0.5f, 6f)
+            micGain = gain; micSens = sensitivity
             kw.gain = gain.coerceIn(0.5f, 6f)
             kw.sensitivity = sensitivity.coerceIn(0.2f, 0.8f)
             local.sensitivity = sensitivity.coerceIn(0.2f, 0.8f)
@@ -169,6 +208,9 @@ class MainActivity : Activity() {
 
     /** Kannada with the downloaded model → fully offline; anything else → the phone's recognizer (Google). */
     private fun begin(lang: String, names: List<String>) {
+        val engine = if (lang == "kn-IN" && useLocal && store.isReady()) (if (kwOn) "keyword listening (offline)" else "full sentences (offline)") else "Google ($lang) — sound not recorded, Google uses the mic itself"
+        DebugRecorder.end()
+        DebugRecorder.begin(this, "Engine: $engine\nMic boost ${micGain}x, softer voices threshold $micSens\nItems searched (keyword mode): $kwItems")
         if (lang == "kn-IN" && useLocal && store.isReady()) {
             if (kwOn) { local.stop(); kw.start(kwItems) } else { kw.stop(); local.start() }
         } else {
@@ -197,6 +239,7 @@ class MainActivity : Activity() {
         speech.stop()
         local.stop()
         kw.stop()
+        DebugRecorder.end()
     }
 
     override fun onResume() {

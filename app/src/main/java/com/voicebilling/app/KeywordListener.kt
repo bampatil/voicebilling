@@ -140,15 +140,17 @@ class KeywordListener(private val act: Activity, private val store: ModelStore, 
                     val n = rec.read(chunk, 0, chunk.size)
                     if (n < 0) {   // the phone took the mic away (error code); try to get it back
                         emit(JSONObject().put("type", "kwmic").put("state", "error").put("code", n))
+                        DebugRecorder.event("MIC", "read error $n")
                         break
                     }
                     if (n == 0) continue
+                    DebugRecorder.audio(chunk, n)
                     // All-zero sound for 2 s = Android is giving this app silence (another app is using the mic).
                     var allZero = true
                     for (i in 0 until n) if (chunk[i].toInt() != 0) { allZero = false; break }
                     if (allZero) {
                         zeroSamples += n
-                        if (zeroSamples >= 2 * rate && !silentReported) { silentReported = true; emit(JSONObject().put("type", "kwmic").put("state", "silent")) }
+                        if (zeroSamples >= 2 * rate && !silentReported) { silentReported = true; emit(JSONObject().put("type", "kwmic").put("state", "silent")); DebugRecorder.event("MIC", "phone is giving silence") }
                     } else {
                         if (silentReported) emit(JSONObject().put("type", "kwmic").put("state", "back"))
                         zeroSamples = 0; silentReported = false
@@ -242,7 +244,16 @@ class KeywordListener(private val act: Activity, private val store: ModelStore, 
                 modelMs += t1 - t0; searchMs += t2 - t1; runs++
                 // What the model wrote down for this stretch (the model's own best guess), so the screen shows it is listening.
                 checks++
-                emit(JSONObject().put("type", "kwheard").put("text", greedy(lp, spotter!!)).put("n", checks))
+                val heardText = greedy(lp, spotter!!)
+                emit(JSONObject().put("type", "kwheard").put("text", heardText).put("n", checks))
+                if (DebugRecorder.active) {
+                    DebugRecorder.event("CHECK", String.format(java.util.Locale.US, "%.1f-%.1fs “%s”  (model %d ms, search %d ms)",
+                        start / rate.toDouble(), end / rate.toDouble(), heardText, t1 - t0, t2 - t1))
+                    if (eng.lastHits.isNotEmpty()) DebugRecorder.event("HITS", eng.lastHits.joinToString("; ") { h ->
+                        val v = if (h.word.kind == Keywords.NUM) fmt(h.word.num) else h.word.key
+                        String.format(java.util.Locale.US, "%s=%s %.2f @%.2f-%.2fs", h.word.text, v, h.score, h.start, h.end)
+                    })
+                }
                 val nowSec = total / rate.toDouble()
                 for (res in results) {
                     val o = JSONObject().put("type", "kw").put("kind", res.kind).put("item", res.item.word.key)
@@ -254,6 +265,10 @@ class KeywordListener(private val act: Activity, private val store: ModelStore, 
                         res.doubt()?.let { o.put("doubt", it) }
                     }
                     emit(o)
+                    if (DebugRecorder.active) DebugRecorder.event(if (res.kind == "order") "ORDER" else "LONE",
+                        (if (res.kind == "order") "${fmt(res.qty())}${res.unit()?.let { " $it" } ?: ""} × item ${res.item.word.key}" else "item ${res.item.word.key} with no number") +
+                        String.format(java.util.Locale.US, " · heard “%s” @%.2f-%.2fs · decided %.1f s after · loudness %s%s",
+                            res.words(), res.start(), res.end(), (nowSec - res.end()), o.opt("loud"), res.doubt()?.let { " · NOT SURE, also heard $it" } ?: ""))
                 }
                 if (firstStat || runs % 10 == 0) {
                     firstStat = false
@@ -265,6 +280,8 @@ class KeywordListener(private val act: Activity, private val store: ModelStore, 
             }
         }
     }
+
+    private fun fmt(v: Double) = if (v == Math.floor(v)) v.toLong().toString() else v.toString()
 
     private fun greedy(lp: Array<FloatArray>, sp: Spotter): String {
         val sb = StringBuilder()

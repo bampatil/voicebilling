@@ -33,5 +33,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Lets the share menu read a test file the shopkeeper chose to share (nothing else) -->
+        <provider
+            android:name=".DebugFileProvider"
+            android:authorities="com.voicebilling.app.debugfiles"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

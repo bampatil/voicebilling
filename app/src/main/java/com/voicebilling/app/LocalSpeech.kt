@@ -120,6 +120,7 @@ class LocalSpeech(private val act: Activity, private val store: ModelStore, priv
                 while (running) {
                     val n = rec.read(chunk, 0, chunk.size)
                     if (n <= 0) continue
+                    DebugRecorder.audio(chunk, n)
                     var sum = 0.0
                     val g = gain
                     for (i in 0 until n) {
@@ -168,6 +169,7 @@ class LocalSpeech(private val act: Activity, private val store: ModelStore, priv
             if (!decodedOnce) { decodedOnce = true; CrashGuard.clear(act) }
             val text = r.getResult(stream).text.trim()
             stream.release()
+            DebugRecorder.event("PHRASE", String.format(java.util.Locale.US, "%.1f s of speech → “%s”", seg.size / rate.toDouble(), text))
             if (text.isNotEmpty()) emit(JSONObject().put("type", "final").put("texts", JSONArray(listOf(text)))
                 .put("loud", loudness(seg)).put("engine", "offline"))
         } catch (e: Throwable) {

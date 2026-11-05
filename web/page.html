@@ -147,6 +147,9 @@ button.primary{background:var(--ink);color:#fff;border-color:var(--ink);font-wei
         <label class="check" style="margin-top:8px"><input type="checkbox" id="useKw"> Keyword listening (test): listen only for numbers, units and your items</label>
         <p class="kwnote" id="kwNote" hidden></p>
         <div class="actions" style="margin-top:8px"><button class="small" id="engBtn">Engine check (test)</button></div>
+        <label class="check" style="margin-top:10px"><input type="checkbox" id="useDbg"> Save a test recording: the sound, what the app understood, and every bill change, with times</label>
+        <div class="actions" style="margin-top:6px"><button class="small" id="dbgShare">Share last test</button><button class="small" id="dbgCopy">Copy test log</button></div>
+        <p class="kwnote">Each Speak → Stop is one test, kept on this phone (last 3) until you share it. It records everyone the mic hears, so tell people nearby. With Google, only the log is saved.</p>
         <pre class="engcheck" id="engOut" hidden></pre>
       </div>
     </div>
@@ -247,7 +250,25 @@ function prep() {
   prepared = VB.prepareCatalogue(CAT.map(c => ({ ...c, aliases: String(c.aliases || "").split(",").map(s => s.trim()).filter(Boolean) })));
 }
 const saveCat = () => { save("voicebilling-catalogue", CAT); prep(); if (typeof sendKw === "function") sendKw(); };
-const saveBill = () => save("voicebilling-bill", BILL);
+// Test log: every bill change, and whether it came from voice, a tap on a suggestion, or typing.
+let BILL_SRC = "typed";
+let BILL_PREV = new Map(BILL.map(l => [l.key, { name: l.name, qty: l.qty, unit: l.unit }]));
+const lineText = l => `${l.name} ${qtyLabel(l.qty, l.unit)}`;
+function dbg(kind, text) { try { if (window.AndroidSpeech && AndroidSpeech.debugEvent) AndroidSpeech.debugEvent(kind, text); } catch (e) {} }
+function dbgBill() {
+  const now = new Map(BILL.map(l => [l.key, l]));
+  if (!now.size && BILL_PREV.size) dbg("BILL", `[${BILL_SRC}] bill cleared`);
+  else {
+    now.forEach((l, k) => {
+      const p = BILL_PREV.get(k);
+      if (!p) dbg("BILL", `[${BILL_SRC}] added ${lineText(l)}`);
+      else if (p.qty !== l.qty) dbg("BILL", `[${BILL_SRC}] changed ${p.name} ${qtyLabel(p.qty, p.unit)} → ${qtyLabel(l.qty, l.unit)}`);
+    });
+    BILL_PREV.forEach((p, k) => { if (!now.has(k)) dbg("BILL", `[${BILL_SRC}] removed ${lineText(p)}`); });
+  }
+  BILL_PREV = new Map(BILL.map(l => [l.key, { name: l.name, qty: l.qty, unit: l.unit }]));
+}
+const saveBill = () => { save("voicebilling-bill", BILL); dbgBill(); };
 
 /* ---------- formatting ---------- */
 const rupees = n => "₹" + (Math.round(n * 100) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 });
@@ -425,7 +446,7 @@ function showSugg(lines) {
   box.append("Add?");
   lines.forEach(l => {
     const b = document.createElement("button"); b.textContent = `+ ${l.name}`;
-    b.onclick = () => { const m = addLine(l); saveBill(); renderBill(); toast(m); b.remove(); if (!box.querySelector("button")) box.hidden = true; };
+    b.onclick = () => { const m = addLine(l); BILL_SRC = "tap"; saveBill(); BILL_SRC = "typed"; renderBill(); toast(m); b.remove(); if (!box.querySelector("button")) box.hidden = true; };
     box.append(b);
   });
 }
@@ -440,6 +461,7 @@ function showHeard(text, result, warn) {
 // how much louder the shopkeeper is than the people around him, to set a "closeness" filter later.
 let LOUD = null;
 function logHeard(text, result) {
+  dbg("HEARD", `“${text}” → ${result}`);
   LOG.unshift({ t: Date.now(), text, result, loud: LOUD ? LOUD.v : null, eng: LOUD ? LOUD.e : "" }); LOG = LOG.slice(0, 30); save("voicebilling-heard", LOG); renderLog();
 }
 function renderLog() {
@@ -656,7 +678,7 @@ function showCrash(ev) {
 }
 window.onNativeSpeech = ev => {
   if (ev.type === "crash") { showCrash(ev); return; }
-  if (ev.type === "kw") { handleKw(ev); return; }
+  if (ev.type === "kw") { BILL_SRC = "voice"; try { handleKw(ev); } finally { BILL_SRC = "typed"; } return; }
   // Keyword listening heartbeat: shows which part is working, so a "stuck" screen can be explained.
   if (ev.type === "kwheard") { if (listening) $("status").textContent = (ev.text ? `Hearing: “${ev.text}”` : "Listening for numbers and items…") + ` · check ${ev.n}`; return; }
   if (ev.type === "kwidle") { if (listening) $("status").textContent = "Waiting for speech… (nobody speaking, or too quiet: watch the Mic level bar)"; return; }
@@ -674,7 +696,7 @@ window.onNativeSpeech = ev => {
   if (ev.type === "hearing") { if (listening) $("status").textContent = ev.on ? "Hearing…" : "Listening offline… say item and quantity."; return; }
   if (ev.type === "level") { $("lvl").style.width = Math.max(0, Math.min(100, (ev.db + 60) / 50 * 100)) + "%"; return; }
   if (ev.type === "partial") showInterim(ev.texts[0] || "");
-  else if (ev.type === "final") { LOUD = (typeof ev.loud === "number" && ev.loud >= 0) ? { v: ev.loud, e: ev.engine || "" } : null; handleFinal(ev.texts || []); LOUD = null; }
+  else if (ev.type === "final") { LOUD = (typeof ev.loud === "number" && ev.loud >= 0) ? { v: ev.loud, e: ev.engine || "" } : null; BILL_SRC = "voice"; try { handleFinal(ev.texts || []); } finally { BILL_SRC = "typed"; } LOUD = null; }
   else if (ev.type === "ready") { if (listening) $("status").textContent = `Listening ${ev.offline ? "offline" : "via Google online"}… say item and quantity.`; }
   else if (ev.type === "state") {
     if (!ev.listening && listening) { listening = false; micUi(false); }
@@ -695,6 +717,8 @@ function startListening() {
   if (NATIVE) {
     AndroidSpeech.start(LANG, JSON.stringify(itemNames()));
     listening = true; micUi(true);
+    // the test log starts a moment later on the phone side; then note what was already on the bill
+    setTimeout(() => dbg("BILL", BILL.length ? `bill at start: ${BILL.map(lineText).join(", ")}` : "bill at start: empty"), 400);
     $("status").textContent = "Starting…";
     return;
   }
@@ -770,6 +794,12 @@ $("crashCopy").onclick = () => { const t = $("crashText").textContent; if (NATIV
 if (HAS_LOCAL) {
   $("useLocal").checked = USE_LOCAL; AndroidSpeech.setEngine(USE_LOCAL);
   $("useKw").checked = KW_ON; sendKw();
+  let USE_DBG = load("voicebilling-dbg", false);
+  $("useDbg").checked = USE_DBG; AndroidSpeech.setDebug(USE_DBG);
+  $("useDbg").onchange = () => { USE_DBG = $("useDbg").checked; save("voicebilling-dbg", USE_DBG); AndroidSpeech.setDebug(USE_DBG);
+    toast(USE_DBG ? "Test recording on: starts with the next Speak" : "Test recording off"); };
+  $("dbgShare").onclick = () => { if (listening) stopListening(); AndroidSpeech.shareDebug(); };
+  $("dbgCopy").onclick = () => AndroidSpeech.copyDebugLog();
   $("useKw").onchange = () => { KW_ON = $("useKw").checked; save("voicebilling-kw", KW_ON); sendKw(); if (listening && localActive()) { stopListening(); startListening(); } };
   $("useLocal").onchange = () => { USE_LOCAL = $("useLocal").checked; save("voicebilling-uselocal", USE_LOCAL); AndroidSpeech.setEngine(USE_LOCAL); if (listening) { stopListening(); startListening(); } showEngine(); };
   const g = $("gain"), sv = $("sens");
